@@ -1,0 +1,48 @@
+{
+  "name": "md-reader",
+  "version": "0.1.3",
+  "private": true,
+  "license": "MIT",
+  "description": "A focused Windows Markdown reader",
+  "type": "module",
+  "scripts": {
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 dev",
+    "dev:frontend": "vite",
+    "typecheck": "tsc --noEmit",
+    "build:renderer": "vite build",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 build",
+    "dist": "npm run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-opener": "^2.2.6",
+    "dompurify": "^3.2.6",
+    "echarts": "^6.1.0",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.18.5",
+    "markdown-it": "^14.1.0",
+    "markdown-it-anchor": "^9.2.0",
+    "markdown-it-container": "^4.0.0",
+    "markdown-it-emoji": "^3.1.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-katex": "^2.0.3",
+    "markdown-it-mark": "^4.0.0",
+    "markdown-it-sub": "^2.0.0",
+    "markdown-it-sup": "^2.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^11.17.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/dompurify": "^3.0.5",
+    "@types/markdown-it": "^14.1.2",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.3"
+  },
+  "packageManager": "npm@11.9.0"
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+release/
+.tools/
+src-tauri/target/
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and local environment files
+*.log
+.env
+.env.*
+!.env.example
