@@ -423,13 +423,13 @@ kbd {
 
 .file-list { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0; width: 100%; margin: 0 0 19px; }
 .file-list-heading { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-list-items { flex: 1 1 auto; min-height: 0; width: calc(100% + var(--sidebar-gutter) + var(--sidebar-gutter)); margin: 8px calc(-1 * var(--sidebar-gutter)) 0; padding: 0 var(--sidebar-gutter); overflow: auto; }
-.directory-item { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 5px 8px; color: var(--text); font-size: 12px; font-weight: 600; }
+.file-list-items { flex: 1 1 auto; min-height: 0; width: calc(100% + var(--sidebar-gutter) + var(--sidebar-gutter)); margin: 8px calc(-1 * var(--sidebar-gutter)) 0; padding: 0 var(--sidebar-gutter); overflow-x: hidden; overflow-y: auto; }
+.directory-item { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 3px 8px; color: var(--text); font-size: 12px; font-weight: 600; }
 .directory-node { min-width: 0; }
-.directory-tree-root { width: 100%; min-width: max(100%, var(--tree-required-width, 0px)); }
+.directory-tree-root { width: 100%; min-width: 0; }
 .directory-item { width: 100%; border: 0; border-radius: 5px; background: transparent; cursor: pointer; text-align: left; }
 .directory-item:hover { background: color-mix(in srgb, var(--accent-soft) 52%, transparent); }
-.directory-root { cursor: default; }
+.directory-root { padding-left: 0; cursor: default; }
 .directory-root:hover { background: transparent; }
 .directory-chevron { position: relative; display: grid; flex: 0 0 10px; place-items: center; width: 10px; height: 16px; overflow: visible !important; color: var(--subtle); }
 .directory-chevron::before { width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; content: ''; transform: translateY(-1.5px) rotate(-45deg); }
@@ -437,9 +437,14 @@ kbd {
 .directory-item .menu-icon { width: 14px; height: 14px; }
 .directory-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .directory-files { padding-left: 10px; }
-.file-item { display: flex; flex-direction: column; min-width: 0; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; text-align: left; }
+.file-item { display: flex; align-items: center; gap: 3px; min-width: 0; width: 100%; padding: 3px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; text-align: left; }
 .file-item:hover, .file-item.active { color: var(--text); background: color-mix(in srgb, var(--accent-soft) 67%, transparent); }
+.file-select { display: flex; align-items: center; gap: 3px; flex: 1 1 auto; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.file-item .menu-icon { flex: 0 0 auto; width: 14px; height: 14px; }
 .file-item span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.file-reveal { display: grid; flex: 0 0 auto; place-items: center; width: 16px; height: 16px; margin-left: auto; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--subtle); cursor: pointer; opacity: .42; transition: color .15s ease, background .15s ease, opacity .15s ease; }
+.file-item:hover .file-reveal, .file-reveal:focus-visible { opacity: 1; }
+.file-reveal:hover, .file-reveal:focus-visible { color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
 .file-item small { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .eyebrow {
@@ -614,7 +619,8 @@ kbd {
 
 .settings-container {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 30px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -623,7 +629,7 @@ kbd {
 }
 
 .bottom-open-menu {
-  flex: 1 1 auto;
+  grid-column: 2;
   min-width: 0;
 }
 
@@ -637,15 +643,32 @@ kbd {
 }
 
 .bottom-open-button > span {
+  position: relative;
   display: block;
-  font-size: 20px;
-  line-height: 1;
+  width: 14px;
+  height: 14px;
+  font-size: 0;
 }
+
+.bottom-open-button > span::before,
+.bottom-open-button > span::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: '';
+  transform: translate(-50%, -50%);
+}
+
+.bottom-open-button > span::after { transform: translate(-50%, -50%) rotate(90deg); }
 
 .bottom-open-menu .open-menu-dropdown {
   top: auto;
   right: auto;
-  bottom: calc(100% - 1px);
+  bottom: 100%;
   left: 0;
   width: 170px;
   padding-top: 5px;
@@ -654,6 +677,7 @@ kbd {
 
 .settings-popover {
   position: relative;
+  grid-column: 3;
   flex: 0 0 auto;
 }
 

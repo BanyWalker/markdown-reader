@@ -1,14 +1,17 @@
 # MD Reader
 
+[English](README.en.md)
+
 一个面向 Windows 的轻量 Markdown 阅读器。MD Reader 使用 Tauri 2、React 和 TypeScript 构建，专注于本地文件阅读、清晰排版和低干扰体验。
 
 如果你正在寻找一款简洁、免费、专注于本地文件的 Markdown 阅读器，欢迎试试 MD Reader。项目目前由作者个人维护，属于兴趣驱动开发；如果你有功能建议或使用反馈，欢迎通过文末联系方式与我交流。如果项目对你有帮助，也欢迎支持项目持续维护。
 
-> 当前版本：`0.1.3`
+> 当前版本：`0.1.4`
 
 ## 目录
 
 - [特性](#特性)
+- [更新记录](CHANGELOG.md)
 - [支持的文件类型](#支持的文件类型)
 - [Markdown 示例](#markdown-示例)
 - [快捷键](#快捷键)
@@ -103,7 +106,7 @@ ECharts 代码块必须使用严格 JSON，并将语言标记写成 `echarts`：
 
 ## 下载与安装
 
-当前最新版（`0.1.3`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。该链接指向仓库 `release/` 目录中的固定文件名，后续构建会自动覆盖为最新版本；正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
+当前最新版（`0.1.4`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。该链接指向仓库 `release/` 目录中的固定文件名，后续构建会自动覆盖为最新版本；正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
 
 安装包为 Windows x64 NSIS 格式。Windows 11 通常已内置 WebView2；如果系统没有 WebView2 Runtime，请先从 Microsoft 官方渠道安装。
 

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { renderMarkdown, renderPlainText, type TableOfContentsItem } from './markdown';
 import { renderVisualPreviews } from './previews';
@@ -39,8 +39,8 @@ const maximumFontSize = 21;
 const scrollPositionStorageKey = 'md-reader-scroll-positions-v1';
 const maximumScrollPositions = 500;
 const maximumScrollPositionAge = 180 * 24 * 60 * 60 * 1000;
-const directoryIndentSize = 10;
-const directoryLabelWidth = 180;
+const directoryIndentSize = 8;
+const directoryIconOffset = 13;
 const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
 const themeLabels: Record<Theme, string> = {
@@ -266,6 +266,14 @@ function App() {
   function selectFile(readerFile: MarkdownFile, shouldRecord = false) {
     if (readerFile.filePath === file?.filePath) return;
     requestDocumentChange(() => selectFileNow(readerFile, shouldRecord));
+  }
+
+  async function revealFileInExplorer(readerFile: MarkdownFile) {
+    try {
+      await revealItemInDir(readerFile.filePath);
+    } catch {
+      showToast('无法在文件资源管理器中定位该文件。', 'error');
+    }
   }
 
   function displayFile(readerFile: MarkdownFile, shouldRecord = true) {
@@ -638,7 +646,7 @@ function App() {
       <header className="titlebar">
         <div className="titlebar-left" aria-hidden="true" />
         <div className="window-title">{file ? <><span>{documentTitle}</span><span className="encoding-badge" title={`文件编码：${encodingLabels[file.encoding] ?? file.encoding}${file.hasBom ? '（含 BOM）' : ''}`}>{encodingLabels[file.encoding] ?? file.encoding}</span>{file.isReadOnly ? <span className="readonly-badge" title="文件为只读，无法保存">只读</span> : null}</> : null}</div>
-        <div className="titlebar-actions" aria-label="文档操作">{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title="保存（Ctrl+S）">{isSaving ? '保存中…' : '保存'}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label="阅读模式" aria-pressed={viewMode === 'reading'} title="阅读模式"><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label="Markdown 源码模式" aria-pressed={viewMode === 'source'} title="Markdown 源码模式"><SourceIcon /></button></div>
+        <div className="titlebar-actions" aria-label="文档操作">{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title="保存（Ctrl+S）">{isSaving ? '保存中…' : '保存'}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label="阅读模式" aria-pressed={viewMode === 'reading'} title="阅读模式"><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label="编辑模式" aria-pressed={viewMode === 'source'} title="编辑模式"><EditIcon /></button></div>
       </header>
       <div className="reading-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
       <div className="app-layout">
@@ -650,7 +658,7 @@ function App() {
               <button className={sidebarTab === 'recent' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'recent'} onClick={() => setSidebarTab('recent')}>最近</button>
             </div>
             {sidebarTab === 'directory' ? <>
-              {files.length ? <FileList files={files} directoryName={directoryName} directoryPath={directoryPath} activePath={file?.filePath} revealActiveDirectory={revealActiveDirectory} onSelect={selectFile} /> : <p className="toc-empty">打开文件夹后，文档会显示在这里。</p>}
+              {files.length ? <FileList files={files} directoryName={directoryName} directoryPath={directoryPath} activePath={file?.filePath} revealActiveDirectory={revealActiveDirectory} onSelect={selectFile} onReveal={revealFileInExplorer} /> : <p className="toc-empty">打开文件夹后，文档会显示在这里。</p>}
             </> : null}
             {sidebarTab === 'outline' ? <nav className="toc sidebar-toc" aria-label="文档大纲">
               <span className="eyebrow">大纲</span>
@@ -733,13 +741,6 @@ function buildDirectoryTree(files: MarkdownFile[], directoryPath: string): Direc
   return root;
 }
 
-function getTreeMaxLevel(node: DirectoryTreeNode, level = 0): number {
-  return node.directories.reduce(
-    (maxLevel, child) => Math.max(maxLevel, getTreeMaxLevel(child, level + 1)),
-    node.files.length ? level + 1 : level
-  );
-}
-
 function getInitialExpandedDirectories(directoryPath: string, activePath: string | undefined, revealActiveDirectory: boolean) {
   const saved = getSavedDirectoryExpansions()[normalizeFilePath(directoryPath)];
   if (saved) return saved;
@@ -754,11 +755,10 @@ function getInitialExpandedDirectories(directoryPath: string, activePath: string
   return expansion;
 }
 
-function FileList({ files, directoryName, directoryPath, activePath, revealActiveDirectory, onSelect }: { files: MarkdownFile[]; directoryName: string; directoryPath: string; activePath?: string; revealActiveDirectory: boolean; onSelect: (file: MarkdownFile) => void; }) {
+function FileList({ files, directoryName, directoryPath, activePath, revealActiveDirectory, onSelect, onReveal }: { files: MarkdownFile[]; directoryName: string; directoryPath: string; activePath?: string; revealActiveDirectory: boolean; onSelect: (file: MarkdownFile) => void; onReveal: (file: MarkdownFile) => void; }) {
   const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(() => getInitialExpandedDirectories(directoryPath, activePath, revealActiveDirectory));
   const expansionSignatureRef = useRef('');
   const tree = useMemo(() => buildDirectoryTree(files, directoryPath), [files, directoryPath]);
-  const treeRequiredWidth = useMemo(() => `${getTreeMaxLevel(tree) * directoryIndentSize + directoryLabelWidth}px`, [tree]);
 
   useEffect(() => {
     const signature = `${normalizeFilePath(directoryPath)}:${revealActiveDirectory ? 'active' : 'directory'}`;
@@ -776,17 +776,21 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
   }
 
   function renderFiles(items: MarkdownFile[], level: number) {
-    return items.map((item) => <button key={item.filePath} className={item.filePath === activePath ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${8 + level * directoryIndentSize}px` }} type="button" onClick={() => onSelect(item)} title={item.filePath}><span>{item.fileName}</span></button>);
+    const paddingLeft = level === 0 ? 0 : directoryIconOffset + (level - 1) * directoryIndentSize;
+    return items.map((item) => {
+      const isActive = item.filePath === activePath;
+      return <div key={item.filePath} className={isActive ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${paddingLeft}px` }}><button className="file-select" type="button" onClick={() => onSelect(item)} title={item.filePath}><FileIcon /><span>{item.fileName}</span></button>{isActive ? <button className="file-reveal" type="button" onClick={() => onReveal(item)} aria-label={`在文件资源管理器中定位 ${item.fileName}`} title="在文件资源管理器中定位"><RevealIcon /></button> : null}</div>;
+    });
   }
 
   function renderDirectories(nodes: DirectoryTreeNode[], level: number): ReactNode {
     return nodes.map((node) => {
       const isExpanded = expandedDirectories[node.path] ?? false;
-      return <div className="directory-node" key={node.path}><button className="directory-item" style={{ paddingLeft: `${8 + level * directoryIndentSize}px` }} type="button" onClick={() => toggleDirectory(node.path)} aria-expanded={isExpanded} title={node.path}><span className={isExpanded ? 'directory-chevron expanded' : 'directory-chevron'} aria-hidden="true" /><FolderIcon /><span>{node.name}</span></button>{isExpanded ? <div className="directory-children">{renderDirectories(node.directories, level + 1)}{renderFiles(node.files, level + 1)}</div> : null}</div>;
+      return <div className="directory-node" key={node.path}><button className="directory-item" style={{ paddingLeft: `${level * directoryIndentSize}px` }} type="button" onClick={() => toggleDirectory(node.path)} aria-expanded={isExpanded} title={node.path}><span className={isExpanded ? 'directory-chevron expanded' : 'directory-chevron'} aria-hidden="true" /><FolderIcon /><span>{node.name}</span></button>{isExpanded ? <div className="directory-children">{renderDirectories(node.directories, level + 1)}{renderFiles(node.files, level + 1)}</div> : null}</div>;
     });
   }
 
-  return <section className="file-list" aria-label="目录文档"><span className="eyebrow file-list-heading" title={directoryName}>目录 · {directoryName} · {files.length}</span><div className="file-list-items"><div className="directory-node directory-tree-root" style={{ '--tree-required-width': treeRequiredWidth } as CSSProperties}><div className="directory-item directory-root"><FolderIcon /><span title={directoryName}>{directoryName}</span></div><div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 1)}</div></div></div></section>;
+  return <section className="file-list" aria-label="目录文档"><span className="eyebrow file-list-heading" title={directoryName}>目录 · {directoryName} · {files.length}</span><div className="file-list-items"><div className="directory-node directory-tree-root"><div className="directory-item directory-root"><FolderIcon /><span title={directoryName}>{directoryName}</span></div><div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 0)}</div></div></div></section>;
 }
 
 function RecentHistory({ history, isOpening, onOpen, onRemove, onClear }: { history: HistoryEntry[]; isOpening: boolean; onOpen: (entry: HistoryEntry) => void; onRemove: (path: string) => void; onClear: () => void; }) {
@@ -801,6 +805,10 @@ function FolderIcon() {
   return <svg className="menu-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l1.8 2h9.2v9.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /><path d="M3.5 8.5h17" /></svg>;
 }
 
+function RevealIcon() {
+  return <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 7h6l1.8 2h9.2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /><path d="M3.5 9h17M14 13.5h5M16.5 11l2.5 2.5-2.5 2.5" /></svg>;
+}
+
 function SettingsIcon() {
   return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" /><path d="m19.4 15 .1.1a1.8 1.8 0 0 1-2.5 2.5l-.1-.1a1.8 1.8 0 0 0-3 .9v.2a1.8 1.8 0 0 1-3.6 0v-.2a1.8 1.8 0 0 0-3-.9l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1.8 1.8 0 0 0-.9-3H3.7a1.8 1.8 0 0 1 0-3h.2a1.8 1.8 0 0 0 .9-3l-.1-.1a1.8 1.8 0 0 1 2.5-2.5l.1.1a1.8 1.8 0 0 0 3-.9v-.2a1.8 1.8 0 0 1 3.6 0v.2a1.8 1.8 0 0 0 3 .9l.1-.1a1.8 1.8 0 0 1 2.5 2.5l-.1.1a1.8 1.8 0 0 0 .9 3h.2a1.8 1.8 0 0 1 0 3h-.2a1.8 1.8 0 0 0-.9 3Z" /></svg>;
 }
@@ -809,8 +817,8 @@ function ReadingIcon() {
   return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.7" /></svg>;
 }
 
-function SourceIcon() {
-  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15" /></svg>;
+function EditIcon() {
+  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4.5 19.5 4.1-1 9.5-9.5a2.1 2.1 0 0 0-3-3l-9.5 9.5z" /><path d="m13.5 7.5 3 3" /></svg>;
 }
 
 function TocItems({ items, activeId, onSelect }: { items: TableOfContentsItem[]; activeId: string; onSelect: (id: string) => void; }) {
