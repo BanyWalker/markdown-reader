@@ -1,6 +1,8 @@
 node_modules/
 dist/
-release/
+release/*
+!release/MD-Reader-latest-x64-setup.exe
+!release/MD-Reader-*-x64-setup.exe
 .tools/
 src-tauri/target/
 

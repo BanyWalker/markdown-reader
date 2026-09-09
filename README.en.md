@@ -2,9 +2,11 @@
 
 A lightweight Markdown reader for Windows. Built with Tauri 2, React, and TypeScript, MD Reader focuses on reading local files, clean typography, and a distraction-free experience.
 
-If you are looking for a simple, free Markdown reader focused on local files, give MD Reader a try. The project is currently maintained by the author as a personal, interest-driven project. Feature suggestions and feedback are welcome through the contact details at the end of this document. If MD Reader is useful to you, consider supporting its continued maintenance.
+![MD Reader interface preview](assets/md-reader-interface.png)
 
-> Current version: `0.1.4`
+If you are looking for a simple, free Markdown reader focused on local files, give MD Reader a try. The project is currently maintained by the author as a personal, interest-driven project. Feature suggestions and feedback are welcome through the contact details at the end of this document.
+
+> Current version: `0.1.5`
 
 [简体中文](README.md)
 
@@ -26,7 +28,6 @@ If you are looking for a simple, free Markdown reader focused on local files, gi
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 - [Author and contact](#author-and-contact)
-- [Sponsorship](#sponsorship)
 
 ## Features
 
@@ -106,7 +107,7 @@ When switching files or folders, or closing the window, the application offers �
 
 ## Download and installation
 
-Latest version (`0.1.4`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). The link points to a fixed filename in the repository's `release/` directory, which is overwritten by subsequent builds. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
+Latest version (`0.1.5`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). Every successful build updates this fixed filename and adds a non-overwritable versioned archive named `MD-Reader-<version>-x64-setup.exe` in `release/`; earlier versioned archives are retained. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
 
 The installer uses the Windows x64 NSIS format. Windows 11 usually includes WebView2. If WebView2 Runtime is not installed, install it first through an official Microsoft channel.
 
@@ -160,6 +161,7 @@ After a successful build, the latest installer is available at:
 
 ```text
 release/MD-Reader-latest-x64-setup.exe
+release/MD-Reader-<version>-x64-setup.exe
 ```
 
 The original Tauri artifacts remain in:
@@ -244,17 +246,3 @@ Refer to `package.json`, `package-lock.json`, and the Rust crate configuration f
 - Email: <794165998@qq.com>
 
 Feedback, feature suggestions, and discussions about the Markdown reader experience are welcome.
-
-## Sponsorship
-
-If MD Reader is helpful to you, you are welcome to voluntarily sponsor its maintenance. The QR code corresponds to the author's personal Alipay account; verify the recipient information shown on Alipay's scan page. Sponsorships are mainly used for project development, maintenance, and related expenses.
-
-- Sponsorship is entirely voluntary and does not affect software downloads, use, updates, or community participation.
-- Sponsorship does not purchase specific features, products, services, or other benefits. Specific features, versions, maintenance periods, or technical support are not guaranteed. Contact the author by email to confirm commercial technical-support terms and fees.
-- This page provides project sponsorship and does not solicit charitable donations. The maintainer does not provide public-welfare donation receipts or tax-deduction certificates. Tax treatment is subject to the actual circumstances and the advice of the competent tax authority.
-- Before paying, verify the Alipay recipient and obtain the QR code from an official project page. For problems caused by an impersonated QR code, mistaken payment, or payment-platform processing, contact the recipient or Alipay.
-- Payments are processed by Alipay. The project will never ask you to provide a payment password or other payment credentials in the application.
-
-Scan with Alipay to pay:
-
-![Alipay donation QR code](assets/alipay-donation.jpg)

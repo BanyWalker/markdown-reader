@@ -4,9 +4,11 @@
 
 一个面向 Windows 的轻量 Markdown 阅读器。MD Reader 使用 Tauri 2、React 和 TypeScript 构建，专注于本地文件阅读、清晰排版和低干扰体验。
 
+![MD Reader 界面预览](assets/md-reader-interface.png)
+
 如果你正在寻找一款简洁、免费、专注于本地文件的 Markdown 阅读器，欢迎试试 MD Reader。项目目前由作者个人维护，属于兴趣驱动开发；如果你有功能建议或使用反馈，欢迎通过文末联系方式与我交流。如果项目对你有帮助，也欢迎支持项目持续维护。
 
-> 当前版本：`0.1.4`
+> 当前版本：`0.1.5`
 
 ## 目录
 
@@ -30,7 +32,7 @@
 
 ## 特性
 
-- **本地优先**：通过系统文件选择器打开单个文件，或递归加载一个文档目录。
+- **本地优先**：通过系统文件选择器逐个打开文件，并以标签页在同一窗口中切换；目录侧栏会保留不同目录的项目，或递归加载一个文档目录。
 - **舒适阅读**：阅读/源码视图切换、文档大纲、阅读进度、四种主题和可调字号。
 - **Markdown 扩展**：支持 GFM 表格、任务列表、删除线、脚注、Emoji、提示容器、上下标、数学公式和代码语法高亮。
 - **图表预览**：内置 ECharts 和 Mermaid 预览；单个图表解析失败不会影响其余文档内容。
@@ -106,7 +108,7 @@ ECharts 代码块必须使用严格 JSON，并将语言标记写成 `echarts`：
 
 ## 下载与安装
 
-当前最新版（`0.1.4`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。该链接指向仓库 `release/` 目录中的固定文件名，后续构建会自动覆盖为最新版本；正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
+当前最新版（`0.1.5`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。每次成功构建都会更新该固定文件名，同时在 `release/` 中新增不可覆盖的版本归档 `MD-Reader-<版本号>-x64-setup.exe`；之前的版本归档会保留。正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
 
 安装包为 Windows x64 NSIS 格式。Windows 11 通常已内置 WebView2；如果系统没有 WebView2 Runtime，请先从 Microsoft 官方渠道安装。
 
@@ -160,6 +162,7 @@ rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
 
 ```text
 release/MD-Reader-latest-x64-setup.exe
+release/MD-Reader-<版本号>-x64-setup.exe
 ```
 
 Tauri 原始产物仍位于：

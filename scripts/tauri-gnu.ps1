@@ -2,10 +2,15 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('dev', 'build')]
-  [string]$Mode
+  [string]$Mode,
+  [switch]$AllowVersionedOverwrite
 )
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$tauriConfig = Get-Content -LiteralPath (Join-Path $projectRoot 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
+$appVersion = [string]$tauriConfig.version
+$releaseDirectory = Join-Path $projectRoot 'release'
+$versionedInstaller = Join-Path $releaseDirectory "MD-Reader-$appVersion-x64-setup.exe"
 $toolchainBin = Join-Path $projectRoot '.tools\llvm-mingw-20260826-ucrt-x86_64\bin'
 $compiler = Join-Path $toolchainBin 'x86_64-w64-mingw32-gcc.exe'
 $archiver = Join-Path $toolchainBin 'x86_64-w64-mingw32-ar.exe'
@@ -33,6 +38,10 @@ if ($Mode -eq 'dev') {
   $env:RUSTFLAGS = '-C link-arg=-Wl,--exclude-all-symbols'
 }
 
+if ($Mode -eq 'build' -and (Test-Path -LiteralPath $versionedInstaller) -and -not $AllowVersionedOverwrite) {
+  throw "The versioned installer already exists and will not be overwritten: $versionedInstaller"
+}
+
 Push-Location $projectRoot
 try {
   & npx tauri $Mode
@@ -43,10 +52,11 @@ try {
       Sort-Object LastWriteTime -Descending |
       Select-Object -First 1
     if ($null -ne $installer) {
-      $releaseDirectory = Join-Path $projectRoot 'release'
       New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
       $latestInstaller = Join-Path $releaseDirectory 'MD-Reader-latest-x64-setup.exe'
+      Copy-Item -LiteralPath $installer.FullName -Destination $versionedInstaller -ErrorAction Stop
       Copy-Item -LiteralPath $installer.FullName -Destination $latestInstaller -Force
+      Write-Host "Copied versioned installer to: $versionedInstaller"
       Write-Host "Copied latest installer to: $latestInstaller"
     }
   }

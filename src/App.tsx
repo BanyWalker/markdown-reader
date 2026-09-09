@@ -32,6 +32,24 @@ interface ScrollPosition {
   updatedAt: number;
 }
 
+interface DocumentTab {
+  id: string;
+  file: MarkdownFile;
+  draftContent: string;
+}
+
+interface DirectoryProject {
+  directoryPath: string;
+  files: MarkdownFile[];
+  revealActiveDirectory: boolean;
+}
+
+interface TabContextMenu {
+  tabId: string | null;
+  x: number;
+  y: number;
+}
+
 type PendingDocumentAction = () => void | Promise<void>;
 
 const minimumFontSize = 15;
@@ -149,15 +167,13 @@ function formatTime(timestamp: number, includeYear = false) {
 
 function App() {
   const runningInTauri = Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-  const [file, setFile] = useState<MarkdownFile | null>(null);
-  const [draftContent, setDraftContent] = useState('');
-  const [files, setFiles] = useState<MarkdownFile[]>([]);
-  const [directoryPath, setDirectoryPath] = useState('');
+  const [tabs, setTabs] = useState<DocumentTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [directoryProjects, setDirectoryProjects] = useState<DirectoryProject[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>(getSavedHistory);
   const [theme, setTheme] = useState<Theme>(getSavedTheme);
   const [viewMode, setViewMode] = useState<ViewMode>('reading');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('directory');
-  const [revealActiveDirectory, setRevealActiveDirectory] = useState(false);
   const [fontSize, setFontSize] = useState(getSavedFontSize);
   const [isOpening, setIsOpening] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -166,19 +182,37 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [showConflictDialog, setShowConflictDialog] = useState(false);
+  const [conflictTabId, setConflictTabId] = useState<string | null>(null);
+  const [pendingUnsavedTabId, setPendingUnsavedTabId] = useState<string | null>(null);
+  const [tabContextMenu, setTabContextMenu] = useState<TabContextMenu | null>(null);
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const readingPaneRef = useRef<HTMLElement>(null);
   const articleRef = useRef<HTMLElement>(null);
+  const activeTabElementRef = useRef<HTMLDivElement>(null);
   const sourceEditorRef = useRef<HTMLTextAreaElement>(null);
   const scrollPositionsRef = useRef<Record<string, ScrollPosition>>(getSavedScrollPositions());
   const scrollSaveTimerRef = useRef<number | null>(null);
   const pendingDocumentActionRef = useRef<PendingDocumentAction | null>(null);
   const restoredDocumentRef = useRef<string | null>(null);
-  const isDirtyRef = useRef(false);
+  const tabsRef = useRef<DocumentTab[]>([]);
+  const activeTabIdRef = useRef<string | null>(null);
+  const closeTabQueueRef = useRef<string[]>([]);
 
-  const isDirty = Boolean(file && draftContent !== file.content);
-  isDirtyRef.current = isDirty;
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const file = activeTab?.file ?? null;
+  const draftContent = activeTab?.draftContent ?? '';
+  const isDirty = Boolean(activeTab && draftContent !== activeTab.file.content);
+  tabsRef.current = tabs;
+  activeTabIdRef.current = activeTabId;
+
+  function setDraftContent(next: string | ((current: string) => string)) {
+    const updated = tabsRef.current.map((tab) => tab.id === activeTabIdRef.current
+      ? { ...tab, draftContent: typeof next === 'function' ? next(tab.draftContent) : next }
+      : tab);
+    tabsRef.current = updated;
+    setTabs(updated);
+  }
 
   const rendered = useMemo(() => {
     if (!file) return null;
@@ -238,34 +272,57 @@ function App() {
     }, 250);
   }
 
-  function selectFileNow(readerFile: MarkdownFile, shouldRecord = false) {
+  function activateTabNow(tabId: string) {
     if (scrollSaveTimerRef.current !== null) {
       window.clearTimeout(scrollSaveTimerRef.current);
       scrollSaveTimerRef.current = null;
     }
     saveCurrentScrollPosition();
     restoredDocumentRef.current = null;
-    setFile(readerFile);
-    setDraftContent(readerFile.content);
+    activeTabIdRef.current = tabId;
+    setActiveTabId(tabId);
     setActiveHeading('');
     setProgress(0);
-    if (shouldRecord) {
-      recordHistory({ path: readerFile.filePath, name: readerFile.fileName, kind: 'file' });
-    }
   }
 
-  function requestDocumentChange(action: PendingDocumentAction) {
-    if (!isDirty) {
+  function openTabNow(readerFile: MarkdownFile, shouldRecord = false) {
+    const id = normalizeFilePath(readerFile.filePath);
+    const existing = tabsRef.current.find((tab) => tab.id === id);
+    if (existing) {
+      activateTabNow(existing.id);
+    } else {
+      if (scrollSaveTimerRef.current !== null) {
+        window.clearTimeout(scrollSaveTimerRef.current);
+        scrollSaveTimerRef.current = null;
+      }
+      saveCurrentScrollPosition();
+      const updated = [...tabsRef.current, { id, file: readerFile, draftContent: readerFile.content }];
+      tabsRef.current = updated;
+      setTabs(updated);
+      activeTabIdRef.current = id;
+      setActiveTabId(id);
+      restoredDocumentRef.current = null;
+      setActiveHeading('');
+      setProgress(0);
+    }
+    if (shouldRecord) recordHistory({ path: readerFile.filePath, name: readerFile.fileName, kind: 'file' });
+  }
+
+  function requestDocumentChange(action: PendingDocumentAction, targetTabId = activeTabId) {
+    const target = tabsRef.current.find((tab) => tab.id === targetTabId);
+    if (!target || target.draftContent === target.file.content) {
       void action();
       return;
     }
     pendingDocumentActionRef.current = action;
+    setPendingUnsavedTabId(target.id);
     setShowUnsavedDialog(true);
   }
 
   function selectFile(readerFile: MarkdownFile, shouldRecord = false) {
-    if (readerFile.filePath === file?.filePath) return;
-    requestDocumentChange(() => selectFileNow(readerFile, shouldRecord));
+    const id = normalizeFilePath(readerFile.filePath);
+    if (id === activeTabId) return;
+    openTabNow(readerFile, shouldRecord);
   }
 
   async function revealFileInExplorer(readerFile: MarkdownFile) {
@@ -276,12 +333,15 @@ function App() {
     }
   }
 
-  function displayFile(readerFile: MarkdownFile, shouldRecord = true) {
-    setFiles([readerFile]);
-    setDirectoryPath(readerFile.directoryPath);
-    setRevealActiveDirectory(true);
-    setSidebarTab('directory');
-    selectFileNow(readerFile, shouldRecord);
+  function upsertDirectoryProject(directoryPath: string, files: MarkdownFile[], revealActiveDirectory: boolean) {
+    const id = normalizeFilePath(directoryPath);
+    setDirectoryProjects((current) => {
+      const existing = current.find((project) => normalizeFilePath(project.directoryPath) === id);
+      if (existing) return current.map((project) => normalizeFilePath(project.directoryPath) === id
+        ? { ...project, files, revealActiveDirectory: project.revealActiveDirectory || revealActiveDirectory }
+        : project);
+      return [...current, { directoryPath, files, revealActiveDirectory }];
+    });
   }
 
   async function openSingleFile(readerFile: MarkdownFile, shouldRecord = true) {
@@ -294,9 +354,7 @@ function App() {
       const matchingFile = directory.files.find((item) => item.filePath === readerFile.filePath);
       if (matchingFile) {
         activeFile = matchingFile;
-        setFiles(directory.files);
-        setDirectoryPath(directory.directoryPath);
-        setRevealActiveDirectory(true);
+        upsertDirectoryProject(directory.directoryPath, directory.files, true);
         if (directory.skippedFiles > 0) {
           showToast(`已跳过 ${directory.skippedFiles} 个无法识别的文件。`, 'info');
         }
@@ -304,33 +362,21 @@ function App() {
       }
     } catch {
     }
-    if (!loadedDirectory) {
-      setFiles([readerFile]);
-      setDirectoryPath(readerFile.directoryPath);
-      setRevealActiveDirectory(true);
-    }
+    if (!loadedDirectory) upsertDirectoryProject(readerFile.directoryPath, [readerFile], true);
     setSidebarTab('directory');
-    selectFileNow(activeFile, false);
+    openTabNow(activeFile, false);
     if (shouldRecord) {
       recordHistory({ path: readerFile.filePath, name: readerFile.fileName, kind: 'file' });
     }
   }
 
   function displayDirectory(directory: MarkdownDirectory, shouldRecord = true) {
-    setFiles(directory.files);
-    setDirectoryPath(directory.directoryPath);
-    setRevealActiveDirectory(false);
+    upsertDirectoryProject(directory.directoryPath, directory.files, false);
     setSidebarTab('directory');
     if (directory.skippedFiles > 0) {
       showToast(`已跳过 ${directory.skippedFiles} 个无法识别的文件。`, 'info');
     }
-    if (directory.files[0]) {
-      selectFileNow(directory.files[0], false);
-    } else {
-      saveCurrentScrollPosition();
-      setFile(null);
-      setDraftContent('');
-    }
+    if (directory.files[0]) openTabNow(directory.files[0], false);
     if (shouldRecord) {
       const name = directory.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? directory.directoryPath;
       recordHistory({ path: directory.directoryPath, name, kind: 'directory' });
@@ -350,7 +396,7 @@ function App() {
   }
 
   function openMarkdown() {
-    requestDocumentChange(openMarkdownNow);
+    void openMarkdownNow();
   }
 
   async function openDirectoryNow() {
@@ -366,7 +412,7 @@ function App() {
   }
 
   function openDirectory() {
-    requestDocumentChange(openDirectoryNow);
+    void openDirectoryNow();
   }
 
   async function openHistoryEntryNow(entry: HistoryEntry) {
@@ -387,7 +433,7 @@ function App() {
   }
 
   function openHistoryEntry(entry: HistoryEntry) {
-    requestDocumentChange(() => openHistoryEntryNow(entry));
+    void openHistoryEntryNow(entry);
   }
 
   function removeHistory(path: string) {
@@ -433,16 +479,22 @@ function App() {
   }
 
   function updateCurrentFile(updatedFile: MarkdownFile) {
-    setFile(updatedFile);
-    setDraftContent(updatedFile.content);
-    setFiles((currentFiles) => currentFiles.map((item) => (
-      item.filePath === updatedFile.filePath ? updatedFile : item
-    )));
+    const id = normalizeFilePath(updatedFile.filePath);
+    const updated = tabsRef.current.map((tab) => tab.id === id
+      ? { ...tab, file: updatedFile, draftContent: updatedFile.content }
+      : tab);
+    tabsRef.current = updated;
+    setTabs(updated);
+    setDirectoryProjects((current) => current.map((project) => ({
+      ...project,
+      files: project.files.map((item) => item.filePath === updatedFile.filePath ? updatedFile : item)
+    })));
   }
 
-  async function saveCurrentFile(force = false) {
-    if (!file || !isDirty || isSaving) return false;
-    if (file.isReadOnly) {
+  async function saveTab(tabId: string | null, force = false) {
+    const target = tabsRef.current.find((tab) => tab.id === tabId);
+    if (!target || target.draftContent === target.file.content || isSaving) return false;
+    if (target.file.isReadOnly) {
       showToast('当前文件为只读，无法保存。', 'error');
       return false;
     }
@@ -454,17 +506,26 @@ function App() {
     setIsSaving(true);
     try {
       const savedFile = await invoke<MarkdownFile>('save_reader_file', {
-        filePath: file.filePath,
-        content: draftContent,
-        encoding: file.encoding,
-        expectedModifiedAt: file.modifiedAt,
+        filePath: target.file.filePath,
+        content: target.draftContent,
+        encoding: target.file.encoding,
+        expectedModifiedAt: target.file.modifiedAt,
         force
       });
-      updateCurrentFile(savedFile);
+      const updated = tabsRef.current.map((tab) => tab.id === tabId
+        ? { ...tab, file: savedFile, draftContent: savedFile.content }
+        : tab);
+      tabsRef.current = updated;
+      setTabs(updated);
+      setDirectoryProjects((current) => current.map((project) => ({
+        ...project,
+        files: project.files.map((item) => item.filePath === savedFile.filePath ? savedFile : item)
+      })));
       showToast('已保存。');
       return true;
     } catch (error) {
       if (String(error).includes('FILE_CHANGED_ON_DISK')) {
+        setConflictTabId(tabId);
         setShowConflictDialog(true);
       } else {
         showToast(error instanceof Error ? error.message : '无法保存该文件。', 'error');
@@ -475,12 +536,18 @@ function App() {
     }
   }
 
-  async function reloadCurrentFile() {
-    if (!file) return;
+  async function saveCurrentFile(force = false) {
+    return saveTab(activeTabId, force);
+  }
+
+  async function reloadTab(tabId: string | null) {
+    const target = tabsRef.current.find((tab) => tab.id === tabId);
+    if (!target) return;
     try {
-      const reloadedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: file.filePath });
+      const reloadedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: target.file.filePath });
       updateCurrentFile(reloadedFile);
       setShowConflictDialog(false);
+      setConflictTabId(null);
       showToast('已重新加载磁盘版本。');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '无法重新加载该文件。', 'error');
@@ -493,24 +560,124 @@ function App() {
     if (action) void action();
   }
 
-  function closeCurrentWindow() {
+  function closeTabNow(tabId: string) {
+    const current = tabsRef.current;
+    const index = current.findIndex((tab) => tab.id === tabId);
+    if (index < 0) return;
+    const isActive = tabId === activeTabIdRef.current;
+    if (isActive) saveCurrentScrollPosition();
+    const next = current.filter((tab) => tab.id !== tabId);
+    tabsRef.current = next;
+    setTabs(next);
+    if (isActive) {
+      const fallback = next[index] ?? next[index - 1] ?? next[0];
+      activeTabIdRef.current = fallback?.id ?? null;
+      setActiveTabId(fallback?.id ?? null);
+      setActiveHeading('');
+      setProgress(0);
+      restoredDocumentRef.current = null;
+    }
+  }
+
+  function closeNextTabInQueue() {
+    const tabId = closeTabQueueRef.current.shift();
+    if (!tabId) return;
+    if (!tabsRef.current.some((tab) => tab.id === tabId)) {
+      closeNextTabInQueue();
+      return;
+    }
+    requestDocumentChange(() => {
+      closeTabNow(tabId);
+      window.setTimeout(closeNextTabInQueue, 0);
+    }, tabId);
+  }
+
+  function closeTabs(tabIds: string[]) {
+    const ids = new Set(tabIds);
+    closeTabQueueRef.current = tabsRef.current.filter((tab) => ids.has(tab.id)).map((tab) => tab.id);
+    closeNextTabInQueue();
+  }
+
+  function closeTab(tabId: string) {
+    closeTabs([tabId]);
+  }
+
+  function openTabContextMenu(event: MouseEvent<HTMLDivElement>, tabId: string | null) {
+    event.preventDefault();
+    setTabContextMenu({
+      tabId,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 164)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 210))
+    });
+  }
+
+  function runTabContextMenuAction(action: 'current' | 'left' | 'right' | 'others' | 'all') {
+    const target = tabContextMenu;
+    setTabContextMenu(null);
+    if (!target) return;
+    const targetTabId = target.tabId ?? activeTabIdRef.current;
+    if (action === 'all') {
+      closeTabs(tabsRef.current.map((tab) => tab.id));
+      return;
+    }
+    if (!targetTabId) return;
+    const index = tabsRef.current.findIndex((tab) => tab.id === targetTabId);
+    if (index < 0) return;
+    const targetIds = action === 'current' ? [targetTabId]
+      : action === 'left' ? tabsRef.current.slice(0, index).map((tab) => tab.id)
+      : action === 'right' ? tabsRef.current.slice(index + 1).map((tab) => tab.id)
+      : tabsRef.current.filter((tab) => tab.id !== targetTabId).map((tab) => tab.id);
+    closeTabs(targetIds);
+  }
+
+  function destroyWindow() {
     void getCurrentWindow().destroy().catch(() => {
       showToast('无法关闭窗口。', 'error');
     });
   }
 
+  function closeCurrentWindow() {
+    const dirtyTab = tabsRef.current.find((tab) => tab.draftContent !== tab.file.content);
+    if (dirtyTab) {
+      setPendingUnsavedTabId(dirtyTab.id);
+      pendingDocumentActionRef.current = closeCurrentWindow;
+      setShowUnsavedDialog(true);
+      return;
+    }
+    destroyWindow();
+  }
+
   async function discardChangesAndContinue() {
     setShowUnsavedDialog(false);
-    if (file) setDraftContent(file.content);
-    runPendingDocumentAction();
+    if (pendingUnsavedTabId) {
+      const updated = tabsRef.current.map((tab) => tab.id === pendingUnsavedTabId
+        ? { ...tab, draftContent: tab.file.content }
+        : tab);
+      tabsRef.current = updated;
+      setTabs(updated);
+    }
+    setPendingUnsavedTabId(null);
+    window.setTimeout(runPendingDocumentAction, 0);
   }
 
   async function saveChangesAndContinue() {
-    const saved = await saveCurrentFile();
+    const saved = await saveTab(pendingUnsavedTabId ?? activeTabId);
     if (!saved) return;
     setShowUnsavedDialog(false);
-    runPendingDocumentAction();
+    setPendingUnsavedTabId(null);
+    window.setTimeout(runPendingDocumentAction, 0);
   }
+
+  useEffect(() => {
+    if (!tabContextMenu) return;
+    const dismiss = () => setTabContextMenu(null);
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('blur', dismiss);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('blur', dismiss);
+    };
+  }, [tabContextMenu]);
 
   function scrollToHeading(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -555,6 +722,10 @@ function App() {
   }, [theme]);
 
   useEffect(() => { localStorage.setItem('md-reader-font-size', String(fontSize)); }, [fontSize]);
+
+  useEffect(() => {
+    activeTabElementRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeTabId, tabs.length]);
 
   useEffect(() => {
     if (!file || viewMode !== 'reading' || !rendered) return;
@@ -610,11 +781,13 @@ function App() {
     let removeCloseListener: (() => void) | undefined;
 
     void getCurrentWindow().onCloseRequested((event) => {
-      if (!isDirtyRef.current) return;
+      if (!tabsRef.current.some((tab) => tab.draftContent !== tab.file.content)) return;
       saveCurrentScrollPosition();
       event.preventDefault();
       pendingDocumentActionRef.current = closeCurrentWindow;
-      setShowUnsavedDialog(true);
+      const dirtyTab = tabsRef.current.find((tab) => tab.draftContent !== tab.file.content);
+      setPendingUnsavedTabId(dirtyTab?.id ?? null);
+      setShowUnsavedDialog(Boolean(dirtyTab));
     }).then((unlisten) => {
       if (isDisposed) unlisten();
       else removeCloseListener = unlisten;
@@ -638,14 +811,28 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  const documentTitle = file?.fileName ?? '未打开文档';
-  const directoryName = directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? '当前目录';
+  const directoryName = file?.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? '当前目录';
 
   return (
     <div className="app-shell">
       <header className="titlebar">
         <div className="titlebar-left" aria-hidden="true" />
-        <div className="window-title">{file ? <><span>{documentTitle}</span><span className="encoding-badge" title={`文件编码：${encodingLabels[file.encoding] ?? file.encoding}${file.hasBom ? '（含 BOM）' : ''}`}>{encodingLabels[file.encoding] ?? file.encoding}</span>{file.isReadOnly ? <span className="readonly-badge" title="文件为只读，无法保存">只读</span> : null}</> : null}</div>
+        <div className="window-title">
+          {tabs.length ? <div className="document-tabs" role="tablist" aria-label="已打开文档" onContextMenu={(event) => { if (event.target === event.currentTarget) openTabContextMenu(event, null); }}>
+            {tabs.map((tab) => {
+              const dirty = tab.draftContent !== tab.file.content;
+              const duplicateName = tabs.filter((item) => item.file.fileName.toLocaleLowerCase() === tab.file.fileName.toLocaleLowerCase()).length > 1;
+              const tabLabel = duplicateName
+                ? `${tab.file.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? ''} / ${tab.file.fileName}`
+                : tab.file.fileName;
+              return <div ref={tab.id === activeTabId ? activeTabElementRef : null} className={tab.id === activeTabId ? 'document-tab active' : 'document-tab'} key={tab.id} onContextMenu={(event) => openTabContextMenu(event, tab.id)}>
+                <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => selectFile(tab.file)} title={tab.file.filePath}><span>{tabLabel}</span>{dirty ? <i aria-label="未保存">•</i> : null}</button>
+                <button className="document-tab-close" type="button" aria-label={`关闭 ${tab.file.fileName}`} onClick={() => closeTab(tab.id)}>×</button>
+              </div>;
+            })}
+          </div> : <span>未打开文档</span>}
+          {file ? <>{file.encoding !== 'UTF-8' ? <span className="encoding-badge" title={`文件编码：${encodingLabels[file.encoding] ?? file.encoding}${file.hasBom ? '（含 BOM）' : ''}`}>{encodingLabels[file.encoding] ?? file.encoding}</span> : null}{file.isReadOnly ? <span className="readonly-badge" title="文件为只读，无法保存">只读</span> : null}</> : null}
+        </div>
         <div className="titlebar-actions" aria-label="文档操作">{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title="保存（Ctrl+S）">{isSaving ? '保存中…' : '保存'}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label="阅读模式" aria-pressed={viewMode === 'reading'} title="阅读模式"><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label="编辑模式" aria-pressed={viewMode === 'source'} title="编辑模式"><EditIcon /></button></div>
       </header>
       <div className="reading-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
@@ -658,7 +845,7 @@ function App() {
               <button className={sidebarTab === 'recent' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'recent'} onClick={() => setSidebarTab('recent')}>最近</button>
             </div>
             {sidebarTab === 'directory' ? <>
-              {files.length ? <FileList files={files} directoryName={directoryName} directoryPath={directoryPath} activePath={file?.filePath} revealActiveDirectory={revealActiveDirectory} onSelect={selectFile} onReveal={revealFileInExplorer} /> : <p className="toc-empty">打开文件夹后，文档会显示在这里。</p>}
+              {directoryProjects.length ? <div className="directory-projects">{directoryProjects.map((project) => <FileList key={normalizeFilePath(project.directoryPath)} files={project.files} directoryName={project.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? project.directoryPath} directoryPath={project.directoryPath} activePath={file?.filePath} revealActiveDirectory={project.revealActiveDirectory} onSelect={selectFile} onReveal={revealFileInExplorer} />)}</div> : <p className="toc-empty">打开文件夹后，文档会显示在这里。</p>}
             </> : null}
             {sidebarTab === 'outline' ? <nav className="toc sidebar-toc" aria-label="文档大纲">
               <span className="eyebrow">大纲</span>
@@ -689,12 +876,22 @@ function App() {
             viewMode === 'source' ? <>
               <SourceEditor content={draftContent} onChange={setDraftContent} editorRef={sourceEditorRef} onFind={() => setIsFindOpen(true)} readOnly={file.isReadOnly} />
               {isFindOpen ? <div className="find-bar"><input value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') findNextInSource(); if (event.key === 'Escape') setIsFindOpen(false); }} placeholder="查找" aria-label="查找源码" autoFocus /><button type="button" onClick={findNextInSource}>下一个</button><button type="button" onClick={() => setIsFindOpen(false)} aria-label="关闭查找">×</button></div> : null}
-            </> : rendered ? <article ref={articleRef} className="markdown-body" style={{ '--reader-font-size': `${fontSize}px` } as CSSProperties} onClick={handleArticleClick} dangerouslySetInnerHTML={{ __html: rendered.html }} /> : null
+            </> : rendered ? <>
+              <div className="document-modified-at" aria-label={`文件最后修改时间：${formatTime(file.modifiedAt, true)}`}>最后修改：{formatTime(file.modifiedAt, true)}</div>
+              <article ref={articleRef} className="markdown-body" style={{ '--reader-font-size': `${fontSize}px` } as CSSProperties} onClick={handleArticleClick} dangerouslySetInnerHTML={{ __html: rendered.html }} />
+            </> : null
           ) : <EmptyState onOpen={openMarkdown} isOpening={isOpening} />}
         </main>
       </div>
-      {showUnsavedDialog ? <Dialog title="保存修改？"><p>“{file?.fileName}”有未保存的修改。</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setShowUnsavedDialog(false); }}>取消</button><button type="button" onClick={() => void discardChangesAndContinue()}>不保存</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? '保存中…' : '保存'}</button></div></Dialog> : null}
-      {showConflictDialog ? <Dialog title="文件已在外部被修改"><p>保存会覆盖磁盘上的新版本。请选择要保留的内容。</p><div className="dialog-actions"><button type="button" onClick={() => setShowConflictDialog(false)}>取消</button><button type="button" onClick={() => void reloadCurrentFile()}>重新加载</button><button className="dialog-primary" type="button" onClick={() => { setShowConflictDialog(false); void saveCurrentFile(true); }} disabled={isSaving}>覆盖保存</button></div></Dialog> : null}
+      {showUnsavedDialog ? <Dialog title="保存修改？"><p>“{tabs.find((tab) => tab.id === pendingUnsavedTabId)?.file.fileName ?? file?.fileName}”有未保存的修改。</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setPendingUnsavedTabId(null); setShowUnsavedDialog(false); }}>取消</button><button type="button" onClick={() => void discardChangesAndContinue()}>不保存</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? '保存中…' : '保存'}</button></div></Dialog> : null}
+      {showConflictDialog ? <Dialog title="文件已在外部被修改"><p>保存会覆盖磁盘上的新版本。请选择要保留的内容。</p><div className="dialog-actions"><button type="button" onClick={() => { setShowConflictDialog(false); setConflictTabId(null); }}>取消</button><button type="button" onClick={() => void reloadTab(conflictTabId)}>重新加载</button><button className="dialog-primary" type="button" onClick={() => { setShowConflictDialog(false); void saveTab(conflictTabId, true); }} disabled={isSaving}>覆盖保存</button></div></Dialog> : null}
+      {tabContextMenu ? <div className="tab-context-menu" role="menu" aria-label="标签页操作" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('current')}>关闭</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('left')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === 0}>关闭左侧标签</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('right')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === tabs.length - 1}>关闭右侧标签</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('others')} disabled={tabs.length <= 1}>关闭其他标签</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('all')} disabled={!tabs.length}>关闭全部标签</button>
+      </div> : null}
       {toast ? <div className={`toast toast-${toast.kind}`} role="status">{toast.message}</div> : null}
     </div>
   );
@@ -790,7 +987,8 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
     });
   }
 
-  return <section className="file-list" aria-label="目录文档"><span className="eyebrow file-list-heading" title={directoryName}>目录 · {directoryName} · {files.length}</span><div className="file-list-items"><div className="directory-node directory-tree-root"><div className="directory-item directory-root"><FolderIcon /><span title={directoryName}>{directoryName}</span></div><div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 0)}</div></div></div></section>;
+  const isRootExpanded = expandedDirectories[''] ?? true;
+  return <section className={isRootExpanded ? 'file-list' : 'file-list collapsed'} aria-label="目录文档"><span className="eyebrow file-list-heading" title={directoryName}>目录 · {directoryName} · {files.length}</span><div className="file-list-items"><div className="directory-node directory-tree-root"><button className="directory-item directory-root" type="button" onClick={() => toggleDirectory('')} aria-expanded={isRootExpanded} title={directoryPath}><span className={isRootExpanded ? 'directory-chevron expanded' : 'directory-chevron'} aria-hidden="true" /><FolderIcon /><span title={directoryName}>{directoryName}</span></button>{isRootExpanded ? <div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 1)}</div> : null}</div></div></section>;
 }
 
 function RecentHistory({ history, isOpening, onOpen, onRemove, onClear }: { history: HistoryEntry[]; isOpening: boolean; onOpen: (entry: HistoryEntry) => void; onRemove: (path: string) => void; onClear: () => void; }) {

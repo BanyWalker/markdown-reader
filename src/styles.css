@@ -126,6 +126,7 @@ a:focus-visible {
   grid-template-columns: minmax(0, 1fr) 214px;
   align-items: center;
   height: 42px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--line);
   background: var(--app-bg);
   user-select: none;
@@ -139,7 +140,7 @@ a:focus-visible {
   justify-content: flex-end;
   gap: 2px;
   width: max-content;
-  margin-right: 8px;
+  margin-right: 0;
   padding: 2px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -244,6 +245,105 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.document-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+
+.document-tabs::-webkit-scrollbar { display: none; }
+
+.document-tab {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 220px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.document-tab.active {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--paper) 78%, transparent);
+}
+
+.document-tab > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 27px;
+  overflow: hidden;
+  padding: 0 5px 0 8px;
+  border: 0;
+  border-radius: 5px 0 0 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.document-tab > button:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-tab.active > button:first-child,
+.document-tab:hover > button:first-child { color: var(--text); }
+.document-tab > button:first-child i { color: var(--accent); font-style: normal; }
+
+.document-tab-close {
+  width: 23px;
+  height: 27px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 5px 5px 0;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.document-tab-close:hover { color: var(--accent); background: var(--accent-soft); }
+
+.tab-context-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  -webkit-app-region: no-drag;
+}
+
+.tab-context-menu button {
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.tab-context-menu button:hover:not(:disabled),
+.tab-context-menu button:focus-visible { background: var(--accent-soft); }
+.tab-context-menu button:disabled { color: var(--subtle); cursor: default; }
 
 .window-title > span:first-child {
   min-width: 0;
@@ -421,15 +521,24 @@ kbd {
   margin: 27px 6px 28px;
 }
 
-.file-list { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0; width: 100%; margin: 0 0 19px; }
+.directory-projects { flex: 1 1 auto; min-height: 0; min-width: 0; width: calc(100% + var(--sidebar-gutter) - 2px); margin-right: calc(-1 * (var(--sidebar-gutter) - 2px)); overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 68%, transparent) transparent; }
+.directory-projects::-webkit-scrollbar { width: 6px; height: 6px; }
+.directory-projects::-webkit-scrollbar-track { background: transparent; }
+.directory-projects::-webkit-scrollbar-thumb { border-radius: 999px; background: color-mix(in srgb, var(--muted) 68%, transparent); }
+.directory-projects::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text) 66%, transparent); }
+.directory-projects .file-list { flex: 0 0 auto; }
+.directory-projects .file-list-items { overflow-y: visible; }
+.file-list { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 0; min-width: 0; width: 100%; margin: 0 0 19px; }
+.file-list.collapsed { flex: 0 0 auto; }
 .file-list-heading { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-list-items { flex: 1 1 auto; min-height: 0; width: calc(100% + var(--sidebar-gutter) + var(--sidebar-gutter)); margin: 8px calc(-1 * var(--sidebar-gutter)) 0; padding: 0 var(--sidebar-gutter); overflow-x: hidden; overflow-y: auto; }
+.file-list.collapsed .file-list-items { flex: 0 0 auto; }
 .directory-item { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 3px 8px; color: var(--text); font-size: 12px; font-weight: 600; }
 .directory-node { min-width: 0; }
 .directory-tree-root { width: 100%; min-width: 0; }
 .directory-item { width: 100%; border: 0; border-radius: 5px; background: transparent; cursor: pointer; text-align: left; }
 .directory-item:hover { background: color-mix(in srgb, var(--accent-soft) 52%, transparent); }
-.directory-root { padding-left: 0; cursor: default; }
+.directory-root { padding-left: 0; }
 .directory-root:hover { background: transparent; }
 .directory-chevron { position: relative; display: grid; flex: 0 0 10px; place-items: center; width: 10px; height: 16px; overflow: visible !important; color: var(--subtle); }
 .directory-chevron::before { width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; content: ''; transform: translateY(-1.5px) rotate(-45deg); }
@@ -828,6 +937,22 @@ kbd {
   background-clip: padding-box;
 }
 
+.document-modified-at {
+  position: absolute;
+  z-index: 1;
+  top: 39px;
+  right: var(--reader-content-gutter);
+  max-width: min(280px, 30vw);
+  overflow: hidden;
+  color: var(--subtle);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .save-button {
   height: 26px;
   padding: 0 8px;
@@ -934,7 +1059,7 @@ kbd {
   width: min(calc(100% - (var(--reader-content-gutter) * 2)), var(--reader-content-max-width));
   min-height: 100%;
   margin: 0 auto;
-  padding: 76px 8px 115px;
+  padding: 28px 8px 115px;
   color: var(--text);
   font-family: Georgia, "Noto Serif SC", "Microsoft YaHei", serif;
   font-size: var(--reader-font-size);
@@ -965,6 +1090,7 @@ kbd {
 
 .markdown-body h1 {
   margin-top: 0;
+  padding-right: min(300px, 32vw);
   padding-bottom: .38em;
   border-bottom: 1px solid var(--line);
   font-size: 2em;
@@ -1431,6 +1557,6 @@ kbd {
   }
 
   .markdown-body {
-    padding-top: 58px;
+    padding-top: 28px;
   }
 }
