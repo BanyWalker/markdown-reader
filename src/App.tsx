@@ -4,6 +4,7 @@ import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { renderMarkdown, renderPlainText, type TableOfContentsItem } from './markdown';
 import { renderVisualPreviews } from './previews';
+import { getSavedLanguage, languageStorageKey, translations, type Language, type Translation } from './i18n';
 
 type Theme = 'light' | 'dark' | 'wood' | 'white';
 type ViewMode = 'reading' | 'source';
@@ -61,13 +62,6 @@ const directoryIndentSize = 8;
 const directoryIconOffset = 13;
 const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
-const themeLabels: Record<Theme, string> = {
-  light: '浅木色',
-  dark: '深色',
-  wood: '木色',
-  white: '纯白'
-};
-
 const encodingLabels: Record<string, string> = {
   'UTF-8': 'UTF-8',
   'GBK': 'GBK / GB18030',
@@ -155,8 +149,8 @@ function getSavedScrollPositions(): Record<string, ScrollPosition> {
   }
 }
 
-function formatTime(timestamp: number, includeYear = false) {
-  return new Intl.DateTimeFormat('zh-CN', {
+function formatTime(timestamp: number, language: Language, includeYear = false) {
+  return new Intl.DateTimeFormat(language, {
     ...(includeYear ? { year: 'numeric' } : {}),
     month: 'numeric',
     day: 'numeric',
@@ -172,6 +166,7 @@ function App() {
   const [directoryProjects, setDirectoryProjects] = useState<DirectoryProject[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>(getSavedHistory);
   const [theme, setTheme] = useState<Theme>(getSavedTheme);
+  const [language, setLanguage] = useState<Language>(getSavedLanguage);
   const [viewMode, setViewMode] = useState<ViewMode>('reading');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('directory');
   const [fontSize, setFontSize] = useState(getSavedFontSize);
@@ -200,6 +195,13 @@ function App() {
   const closeTabQueueRef = useRef<string[]>([]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const t = translations[language];
+  const themeLabels: Record<Theme, string> = {
+    light: t.themeLight,
+    dark: t.themeDark,
+    wood: t.themeWood,
+    white: t.themeWhite
+  };
   const file = activeTab?.file ?? null;
   const draftContent = activeTab?.draftContent ?? '';
   const isDirty = Boolean(activeTab && draftContent !== activeTab.file.content);
@@ -218,8 +220,8 @@ function App() {
     if (!file) return null;
     return file.isPlainText
       ? renderPlainText(draftContent)
-      : renderMarkdown(draftContent, file.directoryPath);
-  }, [draftContent, file]);
+      : renderMarkdown(draftContent, file.directoryPath, language);
+  }, [draftContent, file, language]);
 
   function showToast(message: string, kind: Toast['kind'] = 'info') {
     setToast({ message, kind });
@@ -329,7 +331,7 @@ function App() {
     try {
       await revealItemInDir(readerFile.filePath);
     } catch {
-      showToast('无法在文件资源管理器中定位该文件。', 'error');
+      showToast(t.cannotRevealFile, 'error');
     }
   }
 
@@ -356,7 +358,7 @@ function App() {
         activeFile = matchingFile;
         upsertDirectoryProject(directory.directoryPath, directory.files, true);
         if (directory.skippedFiles > 0) {
-          showToast(`已跳过 ${directory.skippedFiles} 个无法识别的文件。`, 'info');
+          showToast(t.skippedFiles(directory.skippedFiles), 'info');
         }
         loadedDirectory = true;
       }
@@ -374,7 +376,7 @@ function App() {
     upsertDirectoryProject(directory.directoryPath, directory.files, false);
     setSidebarTab('directory');
     if (directory.skippedFiles > 0) {
-      showToast(`已跳过 ${directory.skippedFiles} 个无法识别的文件。`, 'info');
+      showToast(t.skippedFiles(directory.skippedFiles), 'info');
     }
     if (directory.files[0]) openTabNow(directory.files[0], false);
     if (shouldRecord) {
@@ -389,7 +391,7 @@ function App() {
       const selectedFile = await invoke<MarkdownFile | null>('open_reader_file');
       if (selectedFile) await openSingleFile(selectedFile);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法打开该文件。', 'error');
+      showToast(error instanceof Error ? error.message : t.cannotOpenFile, 'error');
     } finally {
       setIsOpening(false);
     }
@@ -405,7 +407,7 @@ function App() {
       const directory = await invoke<MarkdownDirectory | null>('open_reader_directory');
       if (directory) displayDirectory(directory);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法打开该文件夹。', 'error');
+      showToast(error instanceof Error ? error.message : t.cannotOpenFolder, 'error');
     } finally {
       setIsOpening(false);
     }
@@ -426,7 +428,7 @@ function App() {
         await openSingleFile(readerFile);
       }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '最近打开的路径已不可用。', 'error');
+      showToast(error instanceof Error ? error.message : t.historyPathUnavailable, 'error');
     } finally {
       setIsOpening(false);
     }
@@ -471,7 +473,7 @@ function App() {
     const nextIndex = normalizedContent.indexOf(normalizedQuery, editor.selectionEnd);
     const matchIndex = nextIndex >= 0 ? nextIndex : normalizedContent.indexOf(normalizedQuery);
     if (matchIndex < 0) {
-      showToast('未找到匹配内容。');
+      showToast(t.noMatch);
       return;
     }
     editor.focus();
@@ -495,11 +497,11 @@ function App() {
     const target = tabsRef.current.find((tab) => tab.id === tabId);
     if (!target || target.draftContent === target.file.content || isSaving) return false;
     if (target.file.isReadOnly) {
-      showToast('当前文件为只读，无法保存。', 'error');
+      showToast(t.readOnlyFile, 'error');
       return false;
     }
     if (!runningInTauri) {
-      showToast('浏览器预览模式无法保存本地文件。', 'error');
+      showToast(t.browserCannotSave, 'error');
       return false;
     }
 
@@ -521,14 +523,14 @@ function App() {
         ...project,
         files: project.files.map((item) => item.filePath === savedFile.filePath ? savedFile : item)
       })));
-      showToast('已保存。');
+      showToast(t.saved);
       return true;
     } catch (error) {
       if (String(error).includes('FILE_CHANGED_ON_DISK')) {
         setConflictTabId(tabId);
         setShowConflictDialog(true);
       } else {
-        showToast(error instanceof Error ? error.message : '无法保存该文件。', 'error');
+        showToast(error instanceof Error ? error.message : t.cannotSave, 'error');
       }
       return false;
     } finally {
@@ -548,9 +550,9 @@ function App() {
       updateCurrentFile(reloadedFile);
       setShowConflictDialog(false);
       setConflictTabId(null);
-      showToast('已重新加载磁盘版本。');
+      showToast(t.reloaded);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法重新加载该文件。', 'error');
+      showToast(error instanceof Error ? error.message : t.cannotReload, 'error');
     }
   }
 
@@ -632,7 +634,7 @@ function App() {
 
   function destroyWindow() {
     void getCurrentWindow().destroy().catch(() => {
-      showToast('无法关闭窗口。', 'error');
+      showToast(t.cannotCloseWindow, 'error');
     });
   }
 
@@ -710,9 +712,9 @@ function App() {
           const openedWindow = window.open(browserUrl, '_blank', 'noopener,noreferrer');
           if (!openedWindow) throw new Error('Browser blocked the new window.');
         });
-      void openInBrowser.catch(() => showToast('无法打开该链接，请检查默认浏览器设置。', 'error'));
+      void openInBrowser.catch(() => showToast(t.cannotOpenLink, 'error'));
     } else {
-      showToast('当前版本仅支持网页链接和文档内锚点。');
+      showToast(t.supportedLinks);
     }
   }
 
@@ -720,6 +722,11 @@ function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('md-reader-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    localStorage.setItem(languageStorageKey, language);
+  }, [language]);
 
   useEffect(() => { localStorage.setItem('md-reader-font-size', String(fontSize)); }, [fontSize]);
 
@@ -759,8 +766,8 @@ function App() {
   useEffect(() => {
     const article = articleRef.current;
     if (!article || viewMode !== 'reading' || !rendered || file?.isPlainText) return;
-    return renderVisualPreviews(article, theme);
-  }, [file?.isPlainText, rendered, theme, viewMode]);
+    return renderVisualPreviews(article, theme, language);
+  }, [file?.isPlainText, language, rendered, theme, viewMode]);
 
   useEffect(() => () => {
     if (scrollSaveTimerRef.current !== null) window.clearTimeout(scrollSaveTimerRef.current);
@@ -811,14 +818,14 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  const directoryName = file?.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? '当前目录';
+  const directoryName = file?.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? t.currentDirectory;
 
   return (
     <div className="app-shell">
       <header className="titlebar">
         <div className="titlebar-left" aria-hidden="true" />
         <div className="window-title">
-          {tabs.length ? <div className="document-tabs" role="tablist" aria-label="已打开文档" onContextMenu={(event) => { if (event.target === event.currentTarget) openTabContextMenu(event, null); }}>
+          {tabs.length ? <div className="document-tabs" role="tablist" aria-label={t.openDocuments} onContextMenu={(event) => { if (event.target === event.currentTarget) openTabContextMenu(event, null); }}>
             {tabs.map((tab) => {
               const dirty = tab.draftContent !== tab.file.content;
               const duplicateName = tabs.filter((item) => item.file.fileName.toLocaleLowerCase() === tab.file.fileName.toLocaleLowerCase()).length > 1;
@@ -826,47 +833,48 @@ function App() {
                 ? `${tab.file.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? ''} / ${tab.file.fileName}`
                 : tab.file.fileName;
               return <div ref={tab.id === activeTabId ? activeTabElementRef : null} className={tab.id === activeTabId ? 'document-tab active' : 'document-tab'} key={tab.id} onContextMenu={(event) => openTabContextMenu(event, tab.id)}>
-                <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => selectFile(tab.file)} title={tab.file.filePath}><span>{tabLabel}</span>{dirty ? <i aria-label="未保存">•</i> : null}</button>
-                <button className="document-tab-close" type="button" aria-label={`关闭 ${tab.file.fileName}`} onClick={() => closeTab(tab.id)}>×</button>
+                <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => selectFile(tab.file)} title={tab.file.filePath}><span>{tabLabel}</span>{dirty ? <i aria-label={t.unsaved}>•</i> : null}</button>
+                <button className="document-tab-close" type="button" aria-label={t.closeFile(tab.file.fileName)} onClick={() => closeTab(tab.id)}>×</button>
               </div>;
             })}
-          </div> : <span>未打开文档</span>}
-          {file ? <>{file.encoding !== 'UTF-8' ? <span className="encoding-badge" title={`文件编码：${encodingLabels[file.encoding] ?? file.encoding}${file.hasBom ? '（含 BOM）' : ''}`}>{encodingLabels[file.encoding] ?? file.encoding}</span> : null}{file.isReadOnly ? <span className="readonly-badge" title="文件为只读，无法保存">只读</span> : null}</> : null}
+          </div> : <span>{t.noDocumentOpen}</span>}
+          {file ? <>{file.encoding !== 'UTF-8' ? <span className="encoding-badge" title={t.fileEncoding(encodingLabels[file.encoding] ?? file.encoding, file.hasBom)}>{encodingLabels[file.encoding] ?? file.encoding}</span> : null}{file.isReadOnly ? <span className="readonly-badge" title={t.readOnlyFile}>{t.readOnly}</span> : null}</> : null}
         </div>
-        <div className="titlebar-actions" aria-label="文档操作">{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title="保存（Ctrl+S）">{isSaving ? '保存中…' : '保存'}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label="阅读模式" aria-pressed={viewMode === 'reading'} title="阅读模式"><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label="编辑模式" aria-pressed={viewMode === 'source'} title="编辑模式"><EditIcon /></button></div>
+        <div className="titlebar-actions" aria-label={t.documentActions}>{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title={`${t.save} (Ctrl+S)`}>{isSaving ? t.saving : t.save}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label={t.readingMode} aria-pressed={viewMode === 'reading'} title={t.readingMode}><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label={t.editingMode} aria-pressed={viewMode === 'source'} title={t.editingMode}><EditIcon /></button></div>
       </header>
       <div className="reading-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
       <div className="app-layout">
         <aside className="sidebar">
           <div className="sidebar-top">
-            <div className="sidebar-tabs" role="tablist" aria-label="侧栏视图">
-              <button className={sidebarTab === 'directory' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'directory'} onClick={() => setSidebarTab('directory')}>目录</button>
-              <button className={sidebarTab === 'outline' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'outline'} onClick={() => setSidebarTab('outline')}>大纲</button>
-              <button className={sidebarTab === 'recent' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'recent'} onClick={() => setSidebarTab('recent')}>最近</button>
+            <div className="sidebar-tabs" role="tablist" aria-label={t.sidebarViews}>
+              <button className={sidebarTab === 'directory' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'directory'} onClick={() => setSidebarTab('directory')}>{t.directory}</button>
+              <button className={sidebarTab === 'outline' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'outline'} onClick={() => setSidebarTab('outline')}>{t.outline}</button>
+              <button className={sidebarTab === 'recent' ? 'sidebar-tab active' : 'sidebar-tab'} type="button" role="tab" aria-selected={sidebarTab === 'recent'} onClick={() => setSidebarTab('recent')}>{t.recent}</button>
             </div>
             {sidebarTab === 'directory' ? <>
-              {directoryProjects.length ? <div className="directory-projects">{directoryProjects.map((project) => <FileList key={normalizeFilePath(project.directoryPath)} files={project.files} directoryName={project.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? project.directoryPath} directoryPath={project.directoryPath} activePath={file?.filePath} revealActiveDirectory={project.revealActiveDirectory} onSelect={selectFile} onReveal={revealFileInExplorer} />)}</div> : <p className="toc-empty">打开文件夹后，文档会显示在这里。</p>}
+              {directoryProjects.length ? <div className="directory-projects">{directoryProjects.map((project) => <FileList key={normalizeFilePath(project.directoryPath)} files={project.files} directoryName={project.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? project.directoryPath} directoryPath={project.directoryPath} activePath={file?.filePath} revealActiveDirectory={project.revealActiveDirectory} onSelect={selectFile} onReveal={revealFileInExplorer} t={t} />)}</div> : <p className="toc-empty">{t.openFolderToViewDocuments}</p>}
             </> : null}
-            {sidebarTab === 'outline' ? <nav className="toc sidebar-toc" aria-label="文档大纲">
-              <span className="eyebrow">大纲</span>
-              {rendered?.headings.length && viewMode === 'reading' ? <TocItems items={rendered.headings} activeId={activeHeading} onSelect={scrollToHeading} /> : <p className="toc-empty">文档标题会显示在这里。</p>}
+            {sidebarTab === 'outline' ? <nav className="toc sidebar-toc" aria-label={t.documentOutline}>
+              <span className="eyebrow">{t.outline}</span>
+              {rendered?.headings.length && viewMode === 'reading' ? <TocItems items={rendered.headings} activeId={activeHeading} onSelect={scrollToHeading} /> : <p className="toc-empty">{t.headingsAppearHere}</p>}
             </nav> : null}
-            {sidebarTab === 'recent' ? (history.length ? <RecentHistory history={history} isOpening={isOpening} onOpen={openHistoryEntry} onRemove={removeHistory} onClear={() => { localStorage.removeItem('md-reader-history'); setHistory([]); }} /> : <p className="toc-empty recent-empty">暂无最近打开记录。</p>) : null}
+            {sidebarTab === 'recent' ? (history.length ? <RecentHistory history={history} isOpening={isOpening} onOpen={openHistoryEntry} onRemove={removeHistory} onClear={() => { localStorage.removeItem('md-reader-history'); setHistory([]); }} language={language} t={t} /> : <p className="toc-empty recent-empty">{t.noRecentDocuments}</p>) : null}
           </div>
           <div className="settings-container">
             <div className="bottom-open-menu open-menu">
-              <button className="open-button bottom-open-button" type="button" aria-label="打开文件" title="打开文件" onClick={() => void openMarkdown()} disabled={isOpening}><span aria-hidden="true">+</span></button>
+              <button className="open-button bottom-open-button" type="button" aria-label={t.openFile} title={t.openFile} onClick={() => void openMarkdown()} disabled={isOpening}><span aria-hidden="true">+</span></button>
               <div className="open-menu-dropdown" role="menu">
-                <button type="button" role="menuitem" onClick={() => void openMarkdown()} disabled={isOpening}><FileIcon />打开文件</button>
-                <button type="button" role="menuitem" onClick={() => void openDirectory()} disabled={isOpening}><FolderIcon />打开文件夹</button>
+                <button type="button" role="menuitem" onClick={() => void openMarkdown()} disabled={isOpening}><FileIcon />{t.openFile}</button>
+                <button type="button" role="menuitem" onClick={() => void openDirectory()} disabled={isOpening}><FolderIcon />{t.openFolder}</button>
               </div>
             </div>
             <div className="settings-popover">
-              <button className="settings-trigger" type="button" aria-label="打开设置" title="设置"><SettingsIcon /></button>
-              <section className="reader-settings" aria-label="阅读设置">
-              <span className="eyebrow">阅读设置</span>
-              <div className="settings-row"><span>字号</span><div className="font-controls"><button type="button" aria-label="减小字号" onClick={() => changeFontSize(-1)} disabled={fontSize === minimumFontSize}>A-</button><output>{fontSize}</output><button type="button" aria-label="增大字号" onClick={() => changeFontSize(1)} disabled={fontSize === maximumFontSize}>A+</button></div></div>
-              <div className="settings-row theme-row"><span>主题</span><div className="theme-options" role="radiogroup" aria-label="选择主题">{themeOrder.map((option) => <button key={option} className={theme === option ? 'theme-option active' : 'theme-option'} type="button" role="radio" aria-checked={theme === option} aria-label={`${themeLabels[option]}主题`} title={`${themeLabels[option]}主题`} onClick={() => setTheme(option)}><span className={`theme-swatch theme-swatch-${option}`} /></button>)}</div></div>
+              <button className="settings-trigger" type="button" aria-label={t.openSettings} title={t.readerSettings}><SettingsIcon /></button>
+              <section className="reader-settings" aria-label={t.readerSettings}>
+              <span className="eyebrow">{t.readerSettings}</span>
+              <div className="settings-row language-row"><span>{t.language}</span><label className="language-select"><select value={language} onChange={(event) => setLanguage(event.target.value as Language)} aria-label={t.language}><option value="zh-CN">{t.simplifiedChinese}</option><option value="en">{t.english}</option></select></label></div>
+              <div className="settings-row"><span>{t.fontSize}</span><div className="font-controls"><button type="button" aria-label={t.decreaseFontSize} onClick={() => changeFontSize(-1)} disabled={fontSize === minimumFontSize}>A-</button><output>{fontSize}</output><button type="button" aria-label={t.increaseFontSize} onClick={() => changeFontSize(1)} disabled={fontSize === maximumFontSize}>A+</button></div></div>
+              <div className="settings-row theme-row"><span>{t.theme}</span><div className="theme-options" role="radiogroup" aria-label={t.selectTheme}>{themeOrder.map((option) => <button key={option} className={theme === option ? 'theme-option active' : 'theme-option'} type="button" role="radio" aria-checked={theme === option} aria-label={`${themeLabels[option]} ${t.theme}`} title={`${themeLabels[option]} ${t.theme}`} onClick={() => setTheme(option)}><span className={`theme-swatch theme-swatch-${option}`} /></button>)}</div></div>
               </section>
             </div>
           </div>
@@ -874,23 +882,23 @@ function App() {
         <main className="reading-pane" ref={readingPaneRef} onScroll={handleReadingScroll}>
           {file ? (
             viewMode === 'source' ? <>
-              <SourceEditor content={draftContent} onChange={setDraftContent} editorRef={sourceEditorRef} onFind={() => setIsFindOpen(true)} readOnly={file.isReadOnly} />
-              {isFindOpen ? <div className="find-bar"><input value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') findNextInSource(); if (event.key === 'Escape') setIsFindOpen(false); }} placeholder="查找" aria-label="查找源码" autoFocus /><button type="button" onClick={findNextInSource}>下一个</button><button type="button" onClick={() => setIsFindOpen(false)} aria-label="关闭查找">×</button></div> : null}
+              <SourceEditor content={draftContent} onChange={setDraftContent} editorRef={sourceEditorRef} onFind={() => setIsFindOpen(true)} readOnly={file.isReadOnly} t={t} />
+              {isFindOpen ? <div className="find-bar"><input value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') findNextInSource(); if (event.key === 'Escape') setIsFindOpen(false); }} placeholder={t.find} aria-label={t.findSource} autoFocus /><button type="button" onClick={findNextInSource}>{t.next}</button><button type="button" onClick={() => setIsFindOpen(false)} aria-label={t.closeFind}>×</button></div> : null}
             </> : rendered ? <>
-              <div className="document-modified-at" aria-label={`文件最后修改时间：${formatTime(file.modifiedAt, true)}`}>最后修改：{formatTime(file.modifiedAt, true)}</div>
+              <div className="document-modified-at" aria-label={t.lastModifiedAt(formatTime(file.modifiedAt, language, true))}>{t.lastModified}{formatTime(file.modifiedAt, language, true)}</div>
               <article ref={articleRef} className="markdown-body" style={{ '--reader-font-size': `${fontSize}px` } as CSSProperties} onClick={handleArticleClick} dangerouslySetInnerHTML={{ __html: rendered.html }} />
             </> : null
-          ) : <EmptyState onOpen={openMarkdown} isOpening={isOpening} />}
+          ) : <EmptyState onOpen={openMarkdown} isOpening={isOpening} t={t} />}
         </main>
       </div>
-      {showUnsavedDialog ? <Dialog title="保存修改？"><p>“{tabs.find((tab) => tab.id === pendingUnsavedTabId)?.file.fileName ?? file?.fileName}”有未保存的修改。</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setPendingUnsavedTabId(null); setShowUnsavedDialog(false); }}>取消</button><button type="button" onClick={() => void discardChangesAndContinue()}>不保存</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? '保存中…' : '保存'}</button></div></Dialog> : null}
-      {showConflictDialog ? <Dialog title="文件已在外部被修改"><p>保存会覆盖磁盘上的新版本。请选择要保留的内容。</p><div className="dialog-actions"><button type="button" onClick={() => { setShowConflictDialog(false); setConflictTabId(null); }}>取消</button><button type="button" onClick={() => void reloadTab(conflictTabId)}>重新加载</button><button className="dialog-primary" type="button" onClick={() => { setShowConflictDialog(false); void saveTab(conflictTabId, true); }} disabled={isSaving}>覆盖保存</button></div></Dialog> : null}
-      {tabContextMenu ? <div className="tab-context-menu" role="menu" aria-label="标签页操作" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('current')}>关闭</button>
-        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('left')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === 0}>关闭左侧标签</button>
-        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('right')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === tabs.length - 1}>关闭右侧标签</button>
-        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('others')} disabled={tabs.length <= 1}>关闭其他标签</button>
-        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('all')} disabled={!tabs.length}>关闭全部标签</button>
+      {showUnsavedDialog ? <Dialog title={t.saveChanges}><p>{t.unsavedChanges(tabs.find((tab) => tab.id === pendingUnsavedTabId)?.file.fileName ?? file?.fileName ?? '')}</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setPendingUnsavedTabId(null); setShowUnsavedDialog(false); }}>{t.cancel}</button><button type="button" onClick={() => void discardChangesAndContinue()}>{t.dontSave}</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? t.saving : t.save}</button></div></Dialog> : null}
+      {showConflictDialog ? <Dialog title={t.fileChangedExternally}><p>{t.fileChangedExternallyDescription}</p><div className="dialog-actions"><button type="button" onClick={() => { setShowConflictDialog(false); setConflictTabId(null); }}>{t.cancel}</button><button type="button" onClick={() => void reloadTab(conflictTabId)}>{t.reload}</button><button className="dialog-primary" type="button" onClick={() => { setShowConflictDialog(false); void saveTab(conflictTabId, true); }} disabled={isSaving}>{t.overwriteSave}</button></div></Dialog> : null}
+      {tabContextMenu ? <div className="tab-context-menu" role="menu" aria-label={t.tabActions} style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('current')}>{t.close}</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('left')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === 0}>{t.closeLeftTabs}</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('right')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === tabs.length - 1}>{t.closeRightTabs}</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('others')} disabled={tabs.length <= 1}>{t.closeOtherTabs}</button>
+        <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('all')} disabled={!tabs.length}>{t.closeAllTabs}</button>
       </div> : null}
       {toast ? <div className={`toast toast-${toast.kind}`} role="status">{toast.message}</div> : null}
     </div>
@@ -952,7 +960,7 @@ function getInitialExpandedDirectories(directoryPath: string, activePath: string
   return expansion;
 }
 
-function FileList({ files, directoryName, directoryPath, activePath, revealActiveDirectory, onSelect, onReveal }: { files: MarkdownFile[]; directoryName: string; directoryPath: string; activePath?: string; revealActiveDirectory: boolean; onSelect: (file: MarkdownFile) => void; onReveal: (file: MarkdownFile) => void; }) {
+function FileList({ files, directoryName, directoryPath, activePath, revealActiveDirectory, onSelect, onReveal, t }: { files: MarkdownFile[]; directoryName: string; directoryPath: string; activePath?: string; revealActiveDirectory: boolean; onSelect: (file: MarkdownFile) => void; onReveal: (file: MarkdownFile) => void; t: Translation; }) {
   const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(() => getInitialExpandedDirectories(directoryPath, activePath, revealActiveDirectory));
   const expansionSignatureRef = useRef('');
   const tree = useMemo(() => buildDirectoryTree(files, directoryPath), [files, directoryPath]);
@@ -976,7 +984,7 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
     const paddingLeft = level === 0 ? 0 : directoryIconOffset + (level - 1) * directoryIndentSize;
     return items.map((item) => {
       const isActive = item.filePath === activePath;
-      return <div key={item.filePath} className={isActive ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${paddingLeft}px` }}><button className="file-select" type="button" onClick={() => onSelect(item)} title={item.filePath}><FileIcon /><span>{item.fileName}</span></button>{isActive ? <button className="file-reveal" type="button" onClick={() => onReveal(item)} aria-label={`在文件资源管理器中定位 ${item.fileName}`} title="在文件资源管理器中定位"><RevealIcon /></button> : null}</div>;
+      return <div key={item.filePath} className={isActive ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${paddingLeft}px` }}><button className="file-select" type="button" onClick={() => onSelect(item)} title={item.filePath}><FileIcon /><span>{item.fileName}</span></button>{isActive ? <button className="file-reveal" type="button" onClick={() => onReveal(item)} aria-label={t.revealFile(item.fileName)} title={t.revealFileTitle}><RevealIcon /></button> : null}</div>;
     });
   }
 
@@ -988,11 +996,11 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
   }
 
   const isRootExpanded = expandedDirectories[''] ?? true;
-  return <section className={isRootExpanded ? 'file-list' : 'file-list collapsed'} aria-label="目录文档"><span className="eyebrow file-list-heading" title={directoryName}>目录 · {directoryName} · {files.length}</span><div className="file-list-items"><div className="directory-node directory-tree-root"><button className="directory-item directory-root" type="button" onClick={() => toggleDirectory('')} aria-expanded={isRootExpanded} title={directoryPath}><span className={isRootExpanded ? 'directory-chevron expanded' : 'directory-chevron'} aria-hidden="true" /><FolderIcon /><span title={directoryName}>{directoryName}</span></button>{isRootExpanded ? <div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 1)}</div> : null}</div></div></section>;
+  return <section className={isRootExpanded ? 'file-list' : 'file-list collapsed'} aria-label={t.directoryDocuments}><span className="eyebrow file-list-heading" title={directoryName}>{t.directorySummary(directoryName, files.length)}</span><div className="file-list-items"><div className="directory-node directory-tree-root"><button className="directory-item directory-root" type="button" onClick={() => toggleDirectory('')} aria-expanded={isRootExpanded} title={directoryPath}><span className={isRootExpanded ? 'directory-chevron expanded' : 'directory-chevron'} aria-hidden="true" /><FolderIcon /><span title={directoryName}>{directoryName}</span></button>{isRootExpanded ? <div className="directory-children">{renderDirectories(tree.directories, 1)}{renderFiles(tree.files, 1)}</div> : null}</div></div></section>;
 }
 
-function RecentHistory({ history, isOpening, onOpen, onRemove, onClear }: { history: HistoryEntry[]; isOpening: boolean; onOpen: (entry: HistoryEntry) => void; onRemove: (path: string) => void; onClear: () => void; }) {
-  return <section className="history" aria-label="最近打开"><div className="history-heading"><span className="eyebrow">最近打开</span><button type="button" onClick={onClear}>清空</button></div><div className="history-items">{history.map((entry) => <div className="history-item" key={`${entry.kind}-${entry.path}`}><button type="button" onClick={() => void onOpen(entry)} disabled={isOpening}><span>{entry.kind === 'directory' ? '文件夹' : '文件'}：{entry.name}</span><small>{formatTime(entry.accessedAt)}</small></button><button className="history-remove" type="button" onClick={() => onRemove(entry.path)} aria-label={`移除 ${entry.name}`}>×</button></div>)}</div></section>;
+function RecentHistory({ history, isOpening, onOpen, onRemove, onClear, language, t }: { history: HistoryEntry[]; isOpening: boolean; onOpen: (entry: HistoryEntry) => void; onRemove: (path: string) => void; onClear: () => void; language: Language; t: Translation; }) {
+  return <section className="history" aria-label={t.recentlyOpened}><div className="history-heading"><span className="eyebrow">{t.recentlyOpened}</span><button type="button" onClick={onClear}>{t.clear}</button></div><div className="history-items">{history.map((entry) => <div className="history-item" key={`${entry.kind}-${entry.path}`}><button type="button" onClick={() => void onOpen(entry)} disabled={isOpening}><span>{entry.kind === 'directory' ? t.folder : t.file}：{entry.name}</span><small>{formatTime(entry.accessedAt, language)}</small></button><button className="history-remove" type="button" onClick={() => onRemove(entry.path)} aria-label={t.removeItem(entry.name)}>×</button></div>)}</div></section>;
 }
 
 function FileIcon() {
@@ -1008,7 +1016,7 @@ function RevealIcon() {
 }
 
 function SettingsIcon() {
-  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" /><path d="m19.4 15 .1.1a1.8 1.8 0 0 1-2.5 2.5l-.1-.1a1.8 1.8 0 0 0-3 .9v.2a1.8 1.8 0 0 1-3.6 0v-.2a1.8 1.8 0 0 0-3-.9l-.1.1a1.8 1.8 0 0 1-2.5-2.5l.1-.1a1.8 1.8 0 0 0-.9-3H3.7a1.8 1.8 0 0 1 0-3h.2a1.8 1.8 0 0 0 .9-3l-.1-.1a1.8 1.8 0 0 1 2.5-2.5l.1.1a1.8 1.8 0 0 0 3-.9v-.2a1.8 1.8 0 0 1 3.6 0v.2a1.8 1.8 0 0 0 3 .9l.1-.1a1.8 1.8 0 0 1 2.5 2.5l-.1.1a1.8 1.8 0 0 0 .9 3h.2a1.8 1.8 0 0 1 0 3h-.2a1.8 1.8 0 0 0-.9 3Z" /></svg>;
+  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></svg>;
 }
 
 function ReadingIcon() {
@@ -1023,7 +1031,7 @@ function TocItems({ items, activeId, onSelect }: { items: TableOfContentsItem[];
   return <ol>{items.map((item) => <li key={item.id} className={activeId === item.id ? 'active' : ''} data-level={Math.min(item.level, 3)}><button type="button" onClick={() => onSelect(item.id)} title={item.text}>{item.text}</button></li>)}</ol>;
 }
 
-function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false }: { content: string; onChange: (content: string) => void; editorRef: RefObject<HTMLTextAreaElement | null>; onFind: () => void; readOnly?: boolean; }) {
+function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false, t }: { content: string; onChange: (content: string) => void; editorRef: RefObject<HTMLTextAreaElement | null>; onFind: () => void; readOnly?: boolean; t: Translation; }) {
   const lineNumbers = Array.from({ length: content.split('\n').length }, (_, index) => index + 1).join('\n');
   const lineNumbersRef = useRef<HTMLPreElement>(null);
 
@@ -1055,15 +1063,15 @@ function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false }
     window.requestAnimationFrame(() => target.setSelectionRange(nextSelectionStart, nextSelectionStart));
   }
 
-  return <div className={readOnly ? 'source-editor read-only' : 'source-editor'}><pre ref={lineNumbersRef} className="source-line-numbers" aria-hidden="true">{lineNumbers}</pre><textarea ref={editorRef} value={content} readOnly={readOnly} onChange={(event) => { if (readOnly) return; onChange(event.target.value); window.requestAnimationFrame(resizeEditor); }} onKeyDown={handleKeyDown} aria-label="文档源码编辑器" spellCheck={false} /></div>;
+  return <div className={readOnly ? 'source-editor read-only' : 'source-editor'}><pre ref={lineNumbersRef} className="source-line-numbers" aria-hidden="true">{lineNumbers}</pre><textarea ref={editorRef} value={content} readOnly={readOnly} onChange={(event) => { if (readOnly) return; onChange(event.target.value); window.requestAnimationFrame(resizeEditor); }} onKeyDown={handleKeyDown} aria-label={t.sourceEditor} spellCheck={false} /></div>;
 }
 
 function Dialog({ title, children }: { title: string; children: ReactNode }) {
   return <div className="dialog-backdrop" role="presentation"><section className="dialog" role="dialog" aria-modal="true" aria-label={title}><h2>{title}</h2>{children}</section></div>;
 }
 
-function EmptyState({ onOpen, isOpening }: { onOpen: () => void; isOpening: boolean }) {
-  return <section className="empty-state"><div className="empty-icon" aria-hidden="true"><span /><span /><span /></div><p className="eyebrow">MARKDOWN READER</p><h1>安静地阅读，专注于文字。</h1><p>打开一个本地 Markdown 文件，即可获得清晰、舒适的阅读体验。</p><button className="primary-open" type="button" onClick={() => void onOpen()} disabled={isOpening}>{isOpening ? '正在打开…' : '选择 Markdown 文件'}</button><span className="shortcut-hint">或按 <kbd>Ctrl</kbd> + <kbd>O</kbd></span></section>;
+function EmptyState({ onOpen, isOpening, t }: { onOpen: () => void; isOpening: boolean; t: Translation }) {
+  return <section className="empty-state"><div className="empty-icon" aria-hidden="true"><span /><span /><span /></div><p className="eyebrow">MARKDOWN READER</p><h1>{t.emptyTitle}</h1><p>{t.emptyDescription}</p><button className="primary-open" type="button" onClick={() => void onOpen()} disabled={isOpening}>{isOpening ? t.opening : t.chooseMarkdownFile}</button><span className="shortcut-hint">{t.orPress} <kbd>Ctrl</kbd> + <kbd>O</kbd></span></section>;
 }
 
 export default App;

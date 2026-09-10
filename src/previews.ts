@@ -1,6 +1,7 @@
 import * as echarts from 'echarts';
 import mermaid from 'mermaid';
 import DOMPurify from 'dompurify';
+import { translations, type Language } from './i18n';
 
 type PreviewTheme = 'light' | 'dark' | 'wood' | 'white';
 
@@ -16,13 +17,14 @@ function escapeHtml(value: string) {
   })[character] ?? character);
 }
 
-function previewError(kind: string, message: string, source: string) {
-  return `<section class="preview-error" role="status"><strong>${escapeHtml(kind)} 无法渲染</strong><span>${escapeHtml(message)}</span><details><summary>查看原始内容</summary><pre><code>${escapeHtml(source)}</code></pre></details></section>`;
+function previewError(kind: string, message: string, source: string, language: Language) {
+  const t = translations[language];
+  return `<section class="preview-error" role="status"><strong>${escapeHtml(kind)} ${escapeHtml(t.cannotRender)}</strong><span>${escapeHtml(message)}</span><details><summary>${escapeHtml(t.viewSource)}</summary><pre><code>${escapeHtml(source)}</code></pre></details></section>`;
 }
 
-function readSource(element: HTMLElement, attribute: string) {
+function readSource(element: HTMLElement, attribute: string, language: Language) {
   const encodedSource = element.dataset[attribute];
-  if (!encodedSource) throw new Error('预览内容缺失。');
+  if (!encodedSource) throw new Error(translations[language].previewContentMissing);
   return decodeURIComponent(encodedSource);
 }
 
@@ -38,14 +40,15 @@ function hasUnsafeChartValue(value: unknown, key = ''): boolean {
   return false;
 }
 
-function renderECharts(element: HTMLElement, theme: PreviewTheme) {
-  const source = readSource(element, 'echartsOption');
+function renderECharts(element: HTMLElement, theme: PreviewTheme, language: Language) {
+  const t = translations[language];
+  const source = readSource(element, 'echartsOption', language);
   const option: unknown = JSON.parse(source);
   if (!option || Array.isArray(option) || typeof option !== 'object') {
-    throw new Error('配置必须是 JSON 对象。');
+    throw new Error(t.chartConfigurationMustBeObject);
   }
   if (hasUnsafeChartValue(option)) {
-    throw new Error('配置不能引用外部资源。');
+    throw new Error(t.chartConfigurationCannotUseExternalResources);
   }
 
   const chart = echarts.init(element, theme === 'dark' ? 'dark' : undefined, { renderer: 'canvas' });
@@ -59,8 +62,8 @@ function renderECharts(element: HTMLElement, theme: PreviewTheme) {
   };
 }
 
-async function renderMermaid(element: HTMLElement, theme: PreviewTheme) {
-  const source = readSource(element, 'mermaidSource');
+async function renderMermaid(element: HTMLElement, theme: PreviewTheme, language: Language) {
+  const source = readSource(element, 'mermaidSource', language);
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
@@ -75,23 +78,24 @@ async function renderMermaid(element: HTMLElement, theme: PreviewTheme) {
   }
 }
 
-export function renderVisualPreviews(root: HTMLElement, theme: PreviewTheme) {
+export function renderVisualPreviews(root: HTMLElement, theme: PreviewTheme, language: Language) {
+  const t = translations[language];
   const cleanups: Array<() => void> = [];
 
   root.querySelectorAll<HTMLElement>('.echarts-preview').forEach((element) => {
     try {
-      cleanups.push(renderECharts(element, theme));
+      cleanups.push(renderECharts(element, theme, language));
     } catch (error) {
       const source = element.dataset.echartsOption ? decodeURIComponent(element.dataset.echartsOption) : '';
-      element.outerHTML = previewError('ECharts 图表', error instanceof Error ? error.message : '配置无效。', source);
+      element.outerHTML = previewError(t.echartsChart, error instanceof Error ? error.message : t.chartConfigurationInvalidShort, source, language);
     }
   });
 
   root.querySelectorAll<HTMLElement>('.mermaid-preview').forEach((element) => {
-    void renderMermaid(element, theme).catch((error: unknown) => {
+    void renderMermaid(element, theme, language).catch((error: unknown) => {
       if (!element.isConnected) return;
       const source = element.dataset.mermaidSource ? decodeURIComponent(element.dataset.mermaidSource) : '';
-      element.outerHTML = previewError('Mermaid 图示', error instanceof Error ? error.message : '图示语法无效。', source);
+      element.outerHTML = previewError(t.mermaidDiagram, error instanceof Error ? error.message : t.diagramSyntaxInvalid, source, language);
     });
   });
 

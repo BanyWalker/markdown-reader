@@ -8,7 +8,7 @@
 
 如果你正在寻找一款简洁、免费、专注于本地文件的 Markdown 阅读器，欢迎试试 MD Reader。项目目前由作者个人维护，属于兴趣驱动开发；如果你有功能建议或使用反馈，欢迎通过文末联系方式与我交流。如果项目对你有帮助，也欢迎支持项目持续维护。
 
-> 当前版本：`0.1.5`
+> 当前版本：`0.1.6`
 
 ## 目录
 
@@ -108,7 +108,7 @@ ECharts 代码块必须使用严格 JSON，并将语言标记写成 `echarts`：
 
 ## 下载与安装
 
-当前最新版（`0.1.5`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。每次成功构建都会更新该固定文件名，同时在 `release/` 中新增不可覆盖的版本归档 `MD-Reader-<版本号>-x64-setup.exe`；之前的版本归档会保留。正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
+当前最新版（`0.1.6`）：[下载 Windows x64 安装包](./release/MD-Reader-latest-x64-setup.exe)。每次成功构建都会更新该固定文件名，同时在 `release/` 中新增不可覆盖的版本归档 `MD-Reader-<版本号>-x64-setup.exe`；之前的版本归档会保留。正式发布后也会同步到 GitHub Releases（或项目配置的发布渠道）。
 
 安装包为 Windows x64 NSIS 格式。Windows 11 通常已内置 WebView2；如果系统没有 WebView2 Runtime，请先从 Microsoft 官方渠道安装。
 

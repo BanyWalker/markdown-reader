@@ -11,6 +11,7 @@ import sub from 'markdown-it-sub';
 import sup from 'markdown-it-sup';
 import taskLists from 'markdown-it-task-lists';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { translations, type Language } from './i18n';
 import 'katex/dist/katex.min.css';
 
 export interface TableOfContentsItem {
@@ -38,24 +39,27 @@ function escapeHtml(value: string) {
   return MarkdownIt().utils.escapeHtml(value);
 }
 
-function renderPreviewError(kind: string, message: string, source: string) {
-  return `<section class="preview-error" role="status"><strong>${escapeHtml(kind)} 无法渲染</strong><span>${escapeHtml(message)}</span><details><summary>查看原始内容</summary><pre><code>${escapeHtml(source)}</code></pre></details></section>`;
+function renderPreviewError(kind: string, message: string, source: string, language: Language) {
+  const t = translations[language];
+  return `<section class="preview-error" role="status"><strong>${escapeHtml(kind)} ${escapeHtml(t.cannotRender)}</strong><span>${escapeHtml(message)}</span><details><summary>${escapeHtml(t.viewSource)}</summary><pre><code>${escapeHtml(source)}</code></pre></details></section>`;
 }
 
-function renderEChartsBlock(source: string) {
+function renderEChartsBlock(source: string, language: Language) {
+  const t = translations[language];
   try {
     const option = JSON.parse(source);
     if (!option || Array.isArray(option) || typeof option !== 'object') {
-      return renderPreviewError('ECharts 图表', '配置必须是 JSON 对象。', source);
+      return renderPreviewError(t.echartsChart, t.chartConfigurationMustBeObject, source, language);
     }
-    return `<div class="echarts-preview" data-echarts-option="${encodeURIComponent(source)}" aria-label="ECharts 图表"></div>`;
+    return `<div class="echarts-preview" data-echarts-option="${encodeURIComponent(source)}" aria-label="${escapeHtml(t.echartsChart)}"></div>`;
   } catch {
-    return renderPreviewError('ECharts 图表', '配置不是有效的 JSON。', source);
+    return renderPreviewError(t.echartsChart, t.chartConfigurationInvalid, source, language);
   }
 }
 
-function renderMermaidBlock(source: string) {
-  return `<div class="mermaid-preview" data-mermaid-source="${encodeURIComponent(source)}" aria-label="Mermaid 图示"><span>正在渲染图示…</span></div>`;
+function renderMermaidBlock(source: string, language: Language) {
+  const t = translations[language];
+  return `<div class="mermaid-preview" data-mermaid-source="${encodeURIComponent(source)}" aria-label="${escapeHtml(t.mermaidDiagram)}"><span>${escapeHtml(t.renderingDiagram)}</span></div>`;
 }
 
 const markdown = new MarkdownIt({
@@ -80,10 +84,11 @@ const markdown = new MarkdownIt({
 const defaultFenceRenderer = markdown.renderer.rules.fence;
 markdown.renderer.rules.fence = (tokens, index, options, environment, self) => {
   const token = tokens[index];
-  const language = token.info.trim();
+  const fenceLanguage = token.info.trim();
+  const language = (environment as { language?: Language }).language === 'en' ? 'en' : 'zh-CN';
 
-  if (language === 'echarts') return renderEChartsBlock(token.content);
-  if (language === 'mermaid') return renderMermaidBlock(token.content);
+  if (fenceLanguage === 'echarts') return renderEChartsBlock(token.content, language);
+  if (fenceLanguage === 'mermaid') return renderMermaidBlock(token.content, language);
 
   return defaultFenceRenderer
     ? defaultFenceRenderer(tokens, index, options, environment, self)
@@ -110,8 +115,8 @@ markdown.renderer.rules.image = (tokens, index, options, environment, self) => {
     : self.renderToken(tokens, index, options);
 };
 
-export function renderMarkdown(source: string, baseDirectory: string): RenderedMarkdown {
-  const unsafeHtml = markdown.render(source, { baseDirectory });
+export function renderMarkdown(source: string, baseDirectory: string, language: Language): RenderedMarkdown {
+  const unsafeHtml = markdown.render(source, { baseDirectory, language });
   const html = DOMPurify.sanitize(unsafeHtml, {
     USE_PROFILES: { html: true },
     ALLOWED_URI_REGEXP: /^(?:(?:https?|asset):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i

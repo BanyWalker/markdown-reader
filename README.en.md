@@ -6,7 +6,7 @@ A lightweight Markdown reader for Windows. Built with Tauri 2, React, and TypeSc
 
 If you are looking for a simple, free Markdown reader focused on local files, give MD Reader a try. The project is currently maintained by the author as a personal, interest-driven project. Feature suggestions and feedback are welcome through the contact details at the end of this document.
 
-> Current version: `0.1.5`
+> Current version: `0.1.6`
 
 [简体中文](README.md)
 
@@ -107,7 +107,7 @@ When switching files or folders, or closing the window, the application offers �
 
 ## Download and installation
 
-Latest version (`0.1.5`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). Every successful build updates this fixed filename and adds a non-overwritable versioned archive named `MD-Reader-<version>-x64-setup.exe` in `release/`; earlier versioned archives are retained. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
+Latest version (`0.1.6`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). Every successful build updates this fixed filename and adds a non-overwritable versioned archive named `MD-Reader-<version>-x64-setup.exe` in `release/`; earlier versioned archives are retained. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
 
 The installer uses the Windows x64 NSIS format. Windows 11 usually includes WebView2. If WebView2 Runtime is not installed, install it first through an official Microsoft channel.
 
