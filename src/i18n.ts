@@ -90,7 +90,6 @@ export interface Translation {
   emptyDescription: string;
   opening: string;
   chooseMarkdownFile: string;
-  orPress: string;
   cannotRender: string;
   viewSource: string;
   echartsChart: string;
@@ -193,7 +192,6 @@ export const translations: Record<Language, Translation> = {
     emptyDescription: '打开一个本地 Markdown 文件，即可获得清晰、舒适的阅读体验。',
     opening: '正在打开…',
     chooseMarkdownFile: '选择 Markdown 文件',
-    orPress: '或按',
     cannotRender: '无法渲染',
     viewSource: '查看原始内容',
     echartsChart: 'ECharts 图表',
@@ -294,7 +292,6 @@ export const translations: Record<Language, Translation> = {
     emptyDescription: 'Open a local Markdown file for a clear, comfortable reading experience.',
     opening: 'Opening…',
     chooseMarkdownFile: 'Choose a Markdown file',
-    orPress: 'or press',
     cannotRender: 'could not be rendered',
     viewSource: 'View source',
     echartsChart: 'ECharts chart',

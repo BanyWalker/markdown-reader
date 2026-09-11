@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { availableMonitors, getCurrentWindow } from '@tauri-apps/api/window';
 import { renderMarkdown, renderPlainText, trimLinkPunctuation, type TableOfContentsItem } from './markdown';
 import { renderVisualPreviews } from './previews';
 import { getSavedLanguage, languageStorageKey, translations, type Language, type Translation } from './i18n';
@@ -62,6 +64,10 @@ const directoryIndentSize = 8;
 const directoryIconOffset = 13;
 const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
 const externalFileCheckIntervalMs = 1500;
+const directoryRefreshDelayMs = 400;
+const windowStateStorageKey = 'md-reader-window-state-v1';
+const minimumWindowWidth = 900;
+const minimumWindowHeight = 640;
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
 const encodingLabels: Record<string, string> = {
   'UTF-8': 'UTF-8',
@@ -160,6 +166,56 @@ function formatTime(timestamp: number, language: Language, includeYear = false) 
   }).format(timestamp);
 }
 
+interface SavedWindowState {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized: boolean;
+  fullscreen: boolean;
+}
+
+function getSavedWindowState(): SavedWindowState | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(windowStateStorageKey) ?? 'null') as Partial<SavedWindowState> | null;
+    const x = parsed?.x;
+    const y = parsed?.y;
+    const width = parsed?.width;
+    const height = parsed?.height;
+    const maximized = parsed?.maximized;
+    const fullscreen = parsed?.fullscreen;
+    if (typeof x !== 'number' || typeof y !== 'number'
+      || typeof width !== 'number' || typeof height !== 'number'
+      || !Number.isFinite(x) || !Number.isFinite(y)
+      || !Number.isFinite(width) || !Number.isFinite(height)
+      || width < minimumWindowWidth || height < minimumWindowHeight
+      || width > 16000 || height > 16000
+      || typeof maximized !== 'boolean' || typeof fullscreen !== 'boolean') return null;
+    return {
+      x: Math.round(x),
+      y: Math.round(y),
+      width: Math.round(width),
+      height: Math.round(height),
+      maximized,
+      fullscreen
+    };
+  } catch {
+    return null;
+  }
+}
+
+function windowStateIsVisible(state: SavedWindowState, monitors: Awaited<ReturnType<typeof availableMonitors>>) {
+  const right = state.x + state.width;
+  const bottom = state.y + state.height;
+  return monitors.some((monitor) => {
+    const workAreaRight = monitor.workArea.position.x + monitor.workArea.size.width;
+    const workAreaBottom = monitor.workArea.position.y + monitor.workArea.size.height;
+    const overlapWidth = Math.min(right, workAreaRight) - Math.max(state.x, monitor.workArea.position.x);
+    const overlapHeight = Math.min(bottom, workAreaBottom) - Math.max(state.y, monitor.workArea.position.y);
+    return overlapWidth >= 64 && overlapHeight >= 64;
+  });
+}
+
 function App() {
   const runningInTauri = Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
   const [tabs, setTabs] = useState<DocumentTab[]>([]);
@@ -198,6 +254,11 @@ function App() {
   const tabsRef = useRef<DocumentTab[]>([]);
   const activeTabIdRef = useRef<string | null>(null);
   const closeTabQueueRef = useRef<string[]>([]);
+  const directoryProjectsRef = useRef<DirectoryProject[]>([]);
+  const directoryRefreshTimersRef = useRef<Map<string, number>>(new Map());
+  const refreshingDirectoryPathsRef = useRef<Set<string>>(new Set());
+  const pendingDirectoryRefreshesRef = useRef<Set<string>>(new Set());
+  const saveWindowStateRef = useRef<(() => Promise<void>) | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const t = translations[language];
@@ -212,6 +273,7 @@ function App() {
   const isDirty = Boolean(activeTab && draftContent !== activeTab.file.content);
   tabsRef.current = tabs;
   activeTabIdRef.current = activeTabId;
+  directoryProjectsRef.current = directoryProjects;
 
   function setDraftContent(next: string | ((current: string) => string)) {
     const updated = tabsRef.current.map((tab) => tab.id === activeTabIdRef.current
@@ -374,11 +436,45 @@ function App() {
     const id = normalizeFilePath(directoryPath);
     setDirectoryProjects((current) => {
       const existing = current.find((project) => normalizeFilePath(project.directoryPath) === id);
-      if (existing) return current.map((project) => normalizeFilePath(project.directoryPath) === id
+      const next = existing ? current.map((project) => normalizeFilePath(project.directoryPath) === id
         ? { ...project, files, revealActiveDirectory: project.revealActiveDirectory || revealActiveDirectory }
-        : project);
-      return [...current, { directoryPath, files, revealActiveDirectory }];
+        : project)
+        : [...current, { directoryPath, files, revealActiveDirectory }];
+      directoryProjectsRef.current = next;
+      return next;
     });
+  }
+
+  async function refreshDirectoryProject(directoryPath: string) {
+    const id = normalizeFilePath(directoryPath);
+    const project = directoryProjectsRef.current.find((item) => normalizeFilePath(item.directoryPath) === id);
+    if (!project) return;
+    if (refreshingDirectoryPathsRef.current.has(id)) {
+      pendingDirectoryRefreshesRef.current.add(id);
+      return;
+    }
+
+    refreshingDirectoryPathsRef.current.add(id);
+    try {
+      const directory = await invoke<MarkdownDirectory>('load_reader_directory', { directoryPath: project.directoryPath });
+      if (!directoryProjectsRef.current.some((item) => normalizeFilePath(item.directoryPath) === id)) return;
+      upsertDirectoryProject(project.directoryPath, directory.files, project.revealActiveDirectory);
+    } catch {
+      // Keep the last successful directory tree while a folder is being changed or is unavailable.
+    } finally {
+      refreshingDirectoryPathsRef.current.delete(id);
+      if (pendingDirectoryRefreshesRef.current.delete(id)) scheduleDirectoryRefresh(project.directoryPath);
+    }
+  }
+
+  function scheduleDirectoryRefresh(directoryPath: string) {
+    const id = normalizeFilePath(directoryPath);
+    const existingTimer = directoryRefreshTimersRef.current.get(id);
+    if (existingTimer !== undefined) window.clearTimeout(existingTimer);
+    directoryRefreshTimersRef.current.set(id, window.setTimeout(() => {
+      directoryRefreshTimersRef.current.delete(id);
+      void refreshDirectoryProject(directoryPath);
+    }, directoryRefreshDelayMs));
   }
 
   async function openSingleFile(readerFile: MarkdownFile, shouldRecord = true) {
@@ -865,7 +961,8 @@ function App() {
     let isDisposed = false;
     let removeCloseListener: (() => void) | undefined;
 
-    void getCurrentWindow().onCloseRequested((event) => {
+    void getCurrentWindow().onCloseRequested(async (event) => {
+      await saveWindowStateRef.current?.();
       if (!tabsRef.current.some((tab) => tab.draftContent !== tab.file.content)) return;
       saveCurrentScrollPosition();
       event.preventDefault();
@@ -881,6 +978,152 @@ function App() {
     return () => {
       isDisposed = true;
       removeCloseListener?.();
+    };
+  }, [runningInTauri]);
+
+  useEffect(() => {
+    if (!runningInTauri) return;
+    const appWindow = getCurrentWindow();
+    let isDisposed = false;
+    let isRestoring = true;
+    let saveTimer: number | null = null;
+    let latestPosition: { x: number; y: number } | null = null;
+    let latestSize: { width: number; height: number } | null = null;
+    let normalPosition: { x: number; y: number } | null = null;
+    let normalSize: { width: number; height: number } | null = null;
+    const unlisteners: Array<() => void> = [];
+
+    async function readCurrentGeometry() {
+      try {
+        const [position, size] = await Promise.all([appWindow.outerPosition(), appWindow.innerSize()]);
+        latestPosition = { x: position.x, y: position.y };
+        latestSize = { width: size.width, height: size.height };
+        if (!normalPosition) normalPosition = latestPosition;
+        if (!normalSize) normalSize = latestSize;
+      } catch {
+        // The window can disappear while the application is shutting down.
+      }
+    }
+
+    async function saveWindowState() {
+      if (!latestPosition || !latestSize) await readCurrentGeometry();
+      if (!latestPosition || !latestSize) return;
+      try {
+        const [maximized, fullscreen] = await Promise.all([appWindow.isMaximized(), appWindow.isFullscreen()]);
+        if (!maximized && !fullscreen) {
+          normalPosition = latestPosition;
+          normalSize = latestSize;
+        }
+        const position = normalPosition ?? latestPosition;
+        const size = normalSize ?? latestSize;
+        localStorage.setItem(windowStateStorageKey, JSON.stringify({
+          x: Math.round(position.x),
+          y: Math.round(position.y),
+          width: Math.round(size.width),
+          height: Math.round(size.height),
+          maximized,
+          fullscreen
+        } satisfies SavedWindowState));
+      } catch {
+        // Window state persistence is best effort and must not block closing.
+      }
+    }
+
+    function scheduleWindowStateSave() {
+      if (isRestoring) return;
+      if (saveTimer !== null) window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(() => {
+        saveTimer = null;
+        void saveWindowState();
+      }, 250);
+    }
+
+    async function restoreWindowState() {
+      const saved = getSavedWindowState();
+      if (!saved) return;
+
+      let canRestoreGeometry = true;
+      try {
+        const monitors = await availableMonitors();
+        canRestoreGeometry = !monitors.length || windowStateIsVisible(saved, monitors);
+      } catch {
+        // If monitor information is unavailable, retain the user's last geometry.
+      }
+
+      normalPosition = { x: saved.x, y: saved.y };
+      normalSize = { width: saved.width, height: saved.height };
+      if (!saved.fullscreen && canRestoreGeometry) {
+        await appWindow.setSize(new PhysicalSize(saved.width, saved.height));
+        await appWindow.setPosition(new PhysicalPosition(saved.x, saved.y));
+      }
+      if (saved.fullscreen) {
+        await appWindow.setFullscreen(true);
+      } else if (saved.maximized) {
+        await appWindow.maximize();
+      }
+    }
+
+    async function registerWindowListeners() {
+      try {
+        const unlisten = await appWindow.onResized(({ payload }) => {
+          latestSize = { width: payload.width, height: payload.height };
+          scheduleWindowStateSave();
+        });
+        if (isDisposed) unlisten();
+        else unlisteners.push(unlisten);
+      } catch {
+        // Window event APIs are unavailable outside a normal desktop window.
+      }
+      try {
+        const unlisten = await appWindow.onMoved(({ payload }) => {
+          latestPosition = { x: payload.x, y: payload.y };
+          scheduleWindowStateSave();
+        });
+        if (isDisposed) unlisten();
+        else unlisteners.push(unlisten);
+      } catch {
+        // Window event APIs are unavailable outside a normal desktop window.
+      }
+    }
+
+    saveWindowStateRef.current = saveWindowState;
+    void registerWindowListeners();
+    void (async () => {
+      try {
+        await restoreWindowState();
+      } catch {
+        // Ignore stale or unsupported window state and keep the configured defaults.
+      }
+      await readCurrentGeometry();
+      isRestoring = false;
+    })();
+
+    return () => {
+      isDisposed = true;
+      if (saveTimer !== null) window.clearTimeout(saveTimer);
+      unlisteners.forEach((unlisten) => unlisten());
+      if (saveWindowStateRef.current === saveWindowState) saveWindowStateRef.current = null;
+    };
+  }, [runningInTauri]);
+
+  useEffect(() => {
+    if (!runningInTauri) return;
+    let isDisposed = false;
+    let removeDirectoryChangeListener: (() => void) | undefined;
+
+    void listen<string>('reader-directory-changed', (event) => {
+      if (!isDisposed && typeof event.payload === 'string') scheduleDirectoryRefresh(event.payload);
+    }).then((unlisten) => {
+      if (isDisposed) unlisten();
+      else removeDirectoryChangeListener = unlisten;
+    }).catch(() => undefined);
+
+    return () => {
+      isDisposed = true;
+      removeDirectoryChangeListener?.();
+      directoryRefreshTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      directoryRefreshTimersRef.current.clear();
+      pendingDirectoryRefreshesRef.current.clear();
     };
   }, [runningInTauri]);
 
@@ -932,7 +1175,7 @@ function App() {
                 <button className="document-tab-close" type="button" aria-label={t.closeFile(tab.file.fileName)} onClick={() => closeTab(tab.id)}>×</button>
               </div>;
             })}
-          </div> : <span>{t.noDocumentOpen}</span>}
+          </div> : null}
           {file ? <>{file.encoding !== 'UTF-8' ? <span className="encoding-badge" title={t.fileEncoding(encodingLabels[file.encoding] ?? file.encoding, file.hasBom)}>{encodingLabels[file.encoding] ?? file.encoding}</span> : null}{file.isReadOnly ? <span className="readonly-badge" title={t.readOnlyFile}>{t.readOnly}</span> : null}</> : null}
         </div>
         <div className="titlebar-actions" aria-label={t.documentActions}>{viewMode === 'source' && isDirty && !file?.isReadOnly ? <button className="save-button" type="button" onClick={() => void saveCurrentFile()} disabled={isSaving} title={`${t.save} (Ctrl+S)`}>{isSaving ? t.saving : t.save}</button> : null}<button className={viewMode === 'reading' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('reading')} aria-label={t.readingMode} aria-pressed={viewMode === 'reading'} title={t.readingMode}><ReadingIcon /></button><button className={viewMode === 'source' ? 'mode-icon active' : 'mode-icon'} type="button" onClick={() => changeViewMode('source')} aria-label={t.editingMode} aria-pressed={viewMode === 'source'} title={t.editingMode}><EditIcon /></button></div>
@@ -1166,7 +1409,7 @@ function Dialog({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function EmptyState({ onOpen, isOpening, t }: { onOpen: () => void; isOpening: boolean; t: Translation }) {
-  return <section className="empty-state"><div className="empty-icon" aria-hidden="true"><span /><span /><span /></div><p className="eyebrow">MARKDOWN READER</p><h1>{t.emptyTitle}</h1><p>{t.emptyDescription}</p><button className="primary-open" type="button" onClick={() => void onOpen()} disabled={isOpening}>{isOpening ? t.opening : t.chooseMarkdownFile}</button><span className="shortcut-hint">{t.orPress} <kbd>Ctrl</kbd> + <kbd>O</kbd></span></section>;
+  return <section className="empty-state"><div className="empty-icon" aria-hidden="true"><span /><span /><span /></div><p className="eyebrow">MARKDOWN READER</p><h1>{t.emptyTitle}</h1><p>{t.emptyDescription}</p><button className="primary-open" type="button" onClick={() => void onOpen()} disabled={isOpening}>{isOpening ? t.opening : t.chooseMarkdownFile}</button><span className="shortcut-hint"><kbd>Ctrl</kbd> + <kbd>O</kbd></span></section>;
 }
 
 export default App;

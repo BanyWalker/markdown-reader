@@ -12,9 +12,13 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    CreateFileW, MoveFileExW, ReadDirectoryChangesW, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME,
+    FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, OPEN_EXISTING,
 };
 
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdx", "mdown", "mkdn"];
@@ -54,6 +58,7 @@ struct ReaderDirectory {
 
 struct PendingReaderFile(Mutex<Option<ReaderFile>>);
 struct AllowedReaderFiles(Mutex<HashSet<PathBuf>>);
+struct WatchedReaderDirectories(Mutex<HashSet<PathBuf>>);
 
 fn extension_in(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
@@ -490,6 +495,88 @@ fn collect_reader_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()
     Ok(())
 }
 
+fn watch_reader_directory(app: &tauri::AppHandle, directory: &Path) {
+    let Ok(canonical_directory) = directory.canonicalize() else {
+        return;
+    };
+    let watched_directories = app.state::<WatchedReaderDirectories>();
+    {
+        let Ok(mut directories) = watched_directories.0.lock() else {
+            return;
+        };
+        if !directories.insert(canonical_directory.clone()) {
+            return;
+        }
+    }
+
+    let event_directory = directory.to_string_lossy().to_string();
+    let event_app = app.clone();
+    let watch_path = canonical_directory.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("reader-directory-watch".to_string())
+        .spawn(move || {
+            use std::os::windows::ffi::OsStrExt;
+
+            let wide_path = watch_path
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect::<Vec<_>>();
+            let directory_handle = unsafe {
+                CreateFileW(
+                    wide_path.as_ptr(),
+                    FILE_LIST_DIRECTORY,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                    std::ptr::null_mut(),
+                )
+            };
+
+            if directory_handle == INVALID_HANDLE_VALUE {
+                eprintln!("Unable to watch reader directory {}.", watch_path.display());
+            } else {
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let mut bytes_returned = 0;
+                    let did_receive_change = unsafe {
+                        ReadDirectoryChangesW(
+                            directory_handle,
+                            buffer.as_mut_ptr().cast(),
+                            buffer.len() as u32,
+                            1,
+                            FILE_NOTIFY_CHANGE_FILE_NAME
+                                | FILE_NOTIFY_CHANGE_DIR_NAME
+                                | FILE_NOTIFY_CHANGE_LAST_WRITE
+                                | FILE_NOTIFY_CHANGE_SIZE,
+                            &mut bytes_returned,
+                            std::ptr::null_mut(),
+                            None,
+                        )
+                    };
+                    if did_receive_change == 0 {
+                        break;
+                    }
+                    if let Err(error) = event_app.emit("reader-directory-changed", &event_directory) {
+                        eprintln!("Unable to notify the reader about a directory change: {error}");
+                    }
+                }
+                unsafe { CloseHandle(directory_handle) };
+            }
+
+            if let Ok(mut directories) = event_app.state::<WatchedReaderDirectories>().0.lock() {
+                directories.remove(&watch_path);
+            }
+        })
+    {
+        eprintln!("Unable to start a reader directory watcher: {error}");
+        if let Ok(mut directories) = watched_directories.0.lock() {
+            directories.remove(&canonical_directory);
+        }
+    }
+}
+
 fn startup_file_path() -> Option<PathBuf> {
     std::env::args_os()
         .skip(1)
@@ -526,6 +613,8 @@ fn read_reader_directory(
     if !directory.is_dir() {
         return Err("The selected directory does not exist.".to_string());
     }
+
+    watch_reader_directory(app, &directory);
 
     app.asset_protocol_scope()
         .allow_directory(&directory, true)
@@ -637,6 +726,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PendingReaderFile(Mutex::new(None)))
         .manage(AllowedReaderFiles(Mutex::new(HashSet::new())))
+        .manage(WatchedReaderDirectories(Mutex::new(HashSet::new())))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             if let Some(path) = launch_file {

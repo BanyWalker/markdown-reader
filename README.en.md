@@ -6,7 +6,7 @@ A lightweight Markdown reader for Windows. Built with Tauri 2, React, and TypeSc
 
 If you are looking for a simple, free Markdown reader focused on local files, give MD Reader a try. The project is currently maintained by the author as a personal, interest-driven project. Feature suggestions and feedback are welcome through the contact details at the end of this document.
 
-> Current version: `0.1.7`
+> Current version: `0.1.8`
 
 [简体中文](README.md)
 
@@ -31,12 +31,12 @@ If you are looking for a simple, free Markdown reader focused on local files, gi
 
 ## Features
 
-- **Local-first**: Open a single file with the system file picker, or recursively load a document folder.
+- **Local-first**: Open a single file with the system file picker, or recursively load a document folder. Directory contents refresh automatically when files change.
 - **Comfortable reading**: Switch between reading and source views, browse a document outline, track reading progress, choose from four themes, and adjust the font size.
 - **Markdown extensions**: Supports GFM tables, task lists, strikethrough, footnotes, emoji, alert containers, subscript, superscript, math formulas, and syntax highlighting.
 - **Chart previews**: Built-in ECharts and Mermaid previews. A failure in one chart does not affect the rest of the document.
 - **Source editing**: Edit Markdown or text files in common encodings, save explicitly, and get notified about unsaved changes. The original encoding, BOM, and line-ending style are preserved when saving.
-- **Reading state**: Scroll positions and recently opened files are remembered per file and restored after restarting the application.
+- **Reading state**: Scroll positions and recently opened files are remembered per file and restored after restarting the application. Window position, size, maximized, and fullscreen state are also remembered.
 - **Windows integration**: The installer registers Markdown and common text extensions, so MD Reader can be selected from the system's “Open with” menu.
 - **Security boundaries**: Markdown HTML is sanitized. Chart dependencies are bundled locally; JavaScript in documents is not executed, and scripts are not loaded from a CDN.
 
@@ -103,11 +103,11 @@ Charts do not support functions, variables, external data requests, or JavaScrip
 | `Ctrl` + `-` | Decrease font size |
 | `Tab` (source view) | Insert two spaces |
 
-When switching files or folders, or closing the window, the application offers “Save / Don't save / Cancel” if the current document has unsaved changes. Before saving, it checks whether another program has modified the file to avoid silently overwriting external updates.
+When switching files or folders, or closing the window, the application offers “Save / Don't save / Cancel” if the current document has unsaved changes. Open files are checked automatically for external changes; while editing, you can keep editing, discard current changes, or overwrite the current document instead of silently overwriting an external update.
 
 ## Download and installation
 
-Latest version (`0.1.7`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). Every successful build updates this fixed filename and adds a non-overwritable versioned archive named `MD-Reader-<version>-x64-setup.exe` in `release/`; earlier versioned archives are retained. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
+Latest version (`0.1.8`): [Download the Windows x64 installer](./release/MD-Reader-latest-x64-setup.exe). Every successful build updates this fixed filename and adds a non-overwritable versioned archive named `MD-Reader-<version>-x64-setup.exe` in `release/`; earlier versioned archives are retained. After an official release, it will also be synchronized to GitHub Releases (or the release channel configured for the project).
 
 The installer uses the Windows x64 NSIS format. Windows 11 usually includes WebView2. If WebView2 Runtime is not installed, install it first through an official Microsoft channel.
 

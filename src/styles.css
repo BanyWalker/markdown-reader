@@ -1525,6 +1525,10 @@ kbd {
   font-weight: 650;
 }
 
+:root[data-theme='white'] .empty-state .primary-open {
+  color: #4d5358;
+}
+
 .shortcut-hint {
   margin-top: 12px;
   color: var(--subtle);
