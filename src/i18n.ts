@@ -66,8 +66,10 @@ export interface Translation {
   dontSave: string;
   fileChangedExternally: string;
   fileChangedExternallyDescription: string;
+  continueEditing: string;
+  discardChanges: string;
   reload: string;
-  overwriteSave: string;
+  overwriteFile: string;
   tabActions: string;
   close: string;
   closeLeftTabs: string;
@@ -167,8 +169,10 @@ export const translations: Record<Language, Translation> = {
     dontSave: '不保存',
     fileChangedExternally: '文件已在外部被修改',
     fileChangedExternallyDescription: '保存会覆盖磁盘上的新版本。请选择要保留的内容。',
+    continueEditing: '继续编辑',
+    discardChanges: '丢弃当前修改',
     reload: '重新加载',
-    overwriteSave: '覆盖保存',
+    overwriteFile: '覆盖当前文档',
     tabActions: '标签页操作',
     close: '关闭',
     closeLeftTabs: '关闭左侧标签',
@@ -266,8 +270,10 @@ export const translations: Record<Language, Translation> = {
     dontSave: "Don't save",
     fileChangedExternally: 'File changed externally',
     fileChangedExternallyDescription: 'Saving will overwrite the newer version on disk. Choose which content to keep.',
+    continueEditing: 'Keep editing',
+    discardChanges: 'Discard current changes',
     reload: 'Reload',
-    overwriteSave: 'Overwrite and save',
+    overwriteFile: 'Overwrite current document',
     tabActions: 'Tab actions',
     close: 'Close',
     closeLeftTabs: 'Close tabs to the left',

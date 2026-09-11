@@ -291,6 +291,16 @@ fn file_modified_at(metadata: &fs::Metadata) -> f64 {
         .unwrap_or(0.0)
 }
 
+#[tauri::command]
+fn get_reader_file_modified_at(file_path: String) -> Result<f64, String> {
+    let path = PathBuf::from(file_path);
+    let metadata = fs::metadata(&path).map_err(|_| "Unable to read the current file metadata.".to_string())?;
+    if !metadata.is_file() {
+        return Err("The selected path is not a file.".to_string());
+    }
+    Ok(file_modified_at(&metadata))
+}
+
 fn normalize_line_endings(content: &str, uses_crlf: bool) -> String {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     if uses_crlf {
@@ -647,6 +657,7 @@ pub fn run() {
             open_reader_directory,
             load_reader_directory,
             save_reader_file,
+            get_reader_file_modified_at,
             take_startup_reader_file
         ])
         .run(tauri::generate_context!())

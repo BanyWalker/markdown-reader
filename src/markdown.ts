@@ -25,6 +25,80 @@ export interface RenderedMarkdown {
   headings: TableOfContentsItem[];
 }
 
+const trailingLinkPunctuation = new Set([
+  '.', ',', ';', ':', '!', '?',
+  '\u3002', '\uff0c', '\uff1b', '\uff1a', '\uff01', '\uff1f', '\u3001',
+  '\u300d', '\u3009', '\u300b', '\u300f', '\u3011', '\uff09', '\uff3d', '\uff5d',
+  '\u201d', '\u2019', '"', "'"
+]);
+
+// linkify-it correctly permits Unicode URL paths, but Chinese prose often follows a
+// URL without whitespace (for example: "https://example.com（说明）"). Treat common
+// CJK sentence punctuation and opening delimiters as an auto-link boundary.
+const autoLinkTextBoundary = /[\u3000\u3001\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff08\uff3b\uff5b\u3008\u300a\u300c\u300e\u3010\u3014\u2018\u201c]/u;
+
+function countCharacter(value: string, character: string) {
+  return [...value].filter((item) => item === character).length;
+}
+
+/** Removes sentence punctuation accidentally included at the end of an HTTP URL. */
+export function trimLinkPunctuation(value: string) {
+  let url = value.trim();
+  let suffix = '';
+
+  while (url) {
+    const character = url.at(-1);
+    if (!character) break;
+
+    const pairedClosing = character === ')' && countCharacter(url, ')') > countCharacter(url, '(')
+      || character === ']' && countCharacter(url, ']') > countCharacter(url, '[')
+      || character === '}' && countCharacter(url, '}') > countCharacter(url, '{')
+      || character === '\uff09' && countCharacter(url, '\uff09') > countCharacter(url, '\uff08')
+      || character === '\u3011' && countCharacter(url, '\u3011') > countCharacter(url, '\u3010');
+
+    if (!pairedClosing && !trailingLinkPunctuation.has(character)) break;
+    url = url.slice(0, -1);
+    suffix = character + suffix;
+  }
+
+  return { url, suffix };
+}
+
+export function splitAutoLinkText(value: string) {
+  const boundaryIndex = value.search(autoLinkTextBoundary);
+  return boundaryIndex < 0
+    ? { url: value, suffix: '' }
+    : { url: value.slice(0, boundaryIndex), suffix: value.slice(boundaryIndex) };
+}
+
+function normalizeAutoLinks(document: Document) {
+  document.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((anchor) => {
+    const href = anchor.getAttribute('href')?.trim();
+    if (!href || !/^https?:\/\//i.test(href)) return;
+
+    const textNode = anchor.firstChild;
+    const isPlainAutoLink = anchor.hasAttribute('data-auto-link')
+      && anchor.childNodes.length === 1
+      && textNode?.nodeType === Node.TEXT_NODE
+      && /^https?:\/\//i.test(textNode.textContent ?? '');
+    const autoLink = isPlainAutoLink ? splitAutoLinkText(textNode!.textContent!) : { url: href, suffix: '' };
+    const trimmed = trimLinkPunctuation(autoLink.url);
+    const url = trimmed.url;
+    const suffix = trimmed.suffix + autoLink.suffix;
+    if (!suffix || !url) return;
+    anchor.setAttribute('href', url);
+
+    if (anchor.childNodes.length === 1 && textNode?.nodeType === Node.TEXT_NODE) {
+      textNode.textContent = isPlainAutoLink
+        ? url
+        : textNode.textContent?.endsWith(suffix)
+          ? textNode.textContent.slice(0, -suffix.length)
+          : textNode.textContent;
+      anchor.after(document.createTextNode(suffix));
+    }
+  });
+}
+
 function highlightCode(code: string, language: string) {
   if (language && hljs.getLanguage(language)) {
     try {
@@ -95,6 +169,15 @@ markdown.renderer.rules.fence = (tokens, index, options, environment, self) => {
     : self.renderToken(tokens, index, options);
 };
 
+const defaultLinkOpenRenderer = markdown.renderer.rules.link_open;
+markdown.renderer.rules.link_open = (tokens, index, options, environment, self) => {
+  const token = tokens[index];
+  if (token.info === 'auto') token.attrSet('data-auto-link', 'true');
+  return defaultLinkOpenRenderer
+    ? defaultLinkOpenRenderer(tokens, index, options, environment, self)
+    : self.renderToken(tokens, index, options);
+};
+
 const defaultImageRenderer = markdown.renderer.rules.image;
 markdown.renderer.rules.image = (tokens, index, options, environment, self) => {
   const source = tokens[index].attrGet('src');
@@ -117,12 +200,14 @@ markdown.renderer.rules.image = (tokens, index, options, environment, self) => {
 
 export function renderMarkdown(source: string, baseDirectory: string, language: Language): RenderedMarkdown {
   const unsafeHtml = markdown.render(source, { baseDirectory, language });
-  const html = DOMPurify.sanitize(unsafeHtml, {
+  const sanitizedHtml = DOMPurify.sanitize(unsafeHtml, {
     USE_PROFILES: { html: true },
     ALLOWED_URI_REGEXP: /^(?:(?:https?|asset):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
   });
 
-  const documentFragment = new DOMParser().parseFromString(html, 'text/html');
+  const documentFragment = new DOMParser().parseFromString(sanitizedHtml, 'text/html');
+  normalizeAutoLinks(documentFragment);
+  const html = documentFragment.body.innerHTML;
   const headings = Array.from(
     documentFragment.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')
   ).flatMap((heading) => {

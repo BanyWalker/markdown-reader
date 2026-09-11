@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { renderMarkdown, renderPlainText, type TableOfContentsItem } from './markdown';
+import { renderMarkdown, renderPlainText, trimLinkPunctuation, type TableOfContentsItem } from './markdown';
 import { renderVisualPreviews } from './previews';
 import { getSavedLanguage, languageStorageKey, translations, type Language, type Translation } from './i18n';
 
@@ -61,6 +61,7 @@ const maximumScrollPositionAge = 180 * 24 * 60 * 60 * 1000;
 const directoryIndentSize = 8;
 const directoryIconOffset = 13;
 const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
+const externalFileCheckIntervalMs = 1500;
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
 const encodingLabels: Record<string, string> = {
   'UTF-8': 'UTF-8',
@@ -188,6 +189,10 @@ function App() {
   const sourceEditorRef = useRef<HTMLTextAreaElement>(null);
   const scrollPositionsRef = useRef<Record<string, ScrollPosition>>(getSavedScrollPositions());
   const scrollSaveTimerRef = useRef<number | null>(null);
+  const externalFileCheckTimerRef = useRef<number | null>(null);
+  const refreshingTabIdsRef = useRef<Set<string>>(new Set());
+  const conflictQueueRef = useRef<string[]>([]);
+  const activeConflictTabIdRef = useRef<string | null>(null);
   const pendingDocumentActionRef = useRef<PendingDocumentAction | null>(null);
   const restoredDocumentRef = useRef<string | null>(null);
   const tabsRef = useRef<DocumentTab[]>([]);
@@ -214,6 +219,36 @@ function App() {
       : tab);
     tabsRef.current = updated;
     setTabs(updated);
+  }
+
+  function enqueueConflict(tabId: string) {
+    const tab = tabsRef.current.find((item) => item.id === tabId);
+    if (!tab || tab.draftContent === tab.file.content) return;
+    if (activeConflictTabIdRef.current === tabId || conflictQueueRef.current.includes(tabId)) return;
+    conflictQueueRef.current.push(tabId);
+    if (activeConflictTabIdRef.current) return;
+    const nextTabId = conflictQueueRef.current.shift();
+    if (!nextTabId) return;
+    activeConflictTabIdRef.current = nextTabId;
+    setConflictTabId(nextTabId);
+    setShowConflictDialog(true);
+  }
+
+  function resolveConflict() {
+    activeConflictTabIdRef.current = null;
+    let nextTabId: string | null = null;
+    while (conflictQueueRef.current.length) {
+      const candidate = conflictQueueRef.current.shift();
+      if (!candidate) continue;
+      const tab = tabsRef.current.find((item) => item.id === candidate);
+      if (tab && tab.draftContent !== tab.file.content) {
+        nextTabId = candidate;
+        break;
+      }
+    }
+    activeConflictTabIdRef.current = nextTabId;
+    setConflictTabId(nextTabId);
+    setShowConflictDialog(Boolean(nextTabId));
   }
 
   const rendered = useMemo(() => {
@@ -480,10 +515,10 @@ function App() {
     editor.setSelectionRange(matchIndex, matchIndex + query.length);
   }
 
-  function updateCurrentFile(updatedFile: MarkdownFile) {
+  function updateCurrentFile(updatedFile: MarkdownFile, preserveDraft = false) {
     const id = normalizeFilePath(updatedFile.filePath);
     const updated = tabsRef.current.map((tab) => tab.id === id
-      ? { ...tab, file: updatedFile, draftContent: updatedFile.content }
+      ? { ...tab, file: updatedFile, draftContent: preserveDraft ? tab.draftContent : updatedFile.content }
       : tab);
     tabsRef.current = updated;
     setTabs(updated);
@@ -491,6 +526,30 @@ function App() {
       ...project,
       files: project.files.map((item) => item.filePath === updatedFile.filePath ? updatedFile : item)
     })));
+  }
+
+  async function refreshTabIfChanged(tabId: string) {
+    const target = tabsRef.current.find((tab) => tab.id === tabId);
+    if (!target || refreshingTabIdsRef.current.has(tabId)) return;
+
+    refreshingTabIdsRef.current.add(tabId);
+    try {
+      const modifiedAt = await invoke<number>('get_reader_file_modified_at', { filePath: target.file.filePath });
+      const current = tabsRef.current.find((tab) => tab.id === tabId);
+      if (!current || modifiedAt <= current.file.modifiedAt + 0.5) return;
+
+      const refreshedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: current.file.filePath });
+      const latest = tabsRef.current.find((tab) => tab.id === tabId);
+      if (!latest || refreshedFile.modifiedAt <= latest.file.modifiedAt + 0.5) return;
+
+      const hasLocalChanges = latest.draftContent !== latest.file.content;
+      updateCurrentFile(refreshedFile, hasLocalChanges);
+      if (hasLocalChanges) enqueueConflict(tabId);
+    } catch {
+      // The existing tab is kept when the file is temporarily unavailable.
+    } finally {
+      refreshingTabIdsRef.current.delete(tabId);
+    }
   }
 
   async function saveTab(tabId: string | null, force = false) {
@@ -527,8 +586,13 @@ function App() {
       return true;
     } catch (error) {
       if (String(error).includes('FILE_CHANGED_ON_DISK')) {
-        setConflictTabId(tabId);
-        setShowConflictDialog(true);
+        try {
+          const refreshedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: target.file.filePath });
+          if (tabsRef.current.some((tab) => tab.id === tabId)) updateCurrentFile(refreshedFile, true);
+        } catch {
+          // The conflict dialog can still offer a forced overwrite or a reload.
+        }
+        if (tabId) enqueueConflict(tabId);
       } else {
         showToast(error instanceof Error ? error.message : t.cannotSave, 'error');
       }
@@ -548,11 +612,24 @@ function App() {
     try {
       const reloadedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: target.file.filePath });
       updateCurrentFile(reloadedFile);
-      setShowConflictDialog(false);
-      setConflictTabId(null);
+      resolveConflict();
       showToast(t.reloaded);
     } catch (error) {
       showToast(error instanceof Error ? error.message : t.cannotReload, 'error');
+    }
+  }
+
+  async function overwriteConflictTab() {
+    const tabId = conflictTabId;
+    if (!tabId) return;
+    const target = tabsRef.current.find((tab) => tab.id === tabId);
+    if (!target || target.draftContent === target.file.content) {
+      resolveConflict();
+      return;
+    }
+    const saved = await saveTab(tabId, true);
+    if (saved) {
+      resolveConflict();
     }
   }
 
@@ -704,7 +781,8 @@ function App() {
     const href = link?.getAttribute('href')?.trim();
     if (!href || href.startsWith('#')) return;
     event.preventDefault();
-    const browserUrl = /^www\./i.test(href) ? `https://${href}` : href;
+    const normalizedHref = trimLinkPunctuation(href).url;
+    const browserUrl = /^www\./i.test(normalizedHref) ? `https://${normalizedHref}` : normalizedHref;
     if (/^(?:https?:\/\/|mailto:|tel:)/i.test(browserUrl)) {
       const openInBrowser = runningInTauri
         ? openUrl(browserUrl)
@@ -807,6 +885,23 @@ function App() {
   }, [runningInTauri]);
 
   useEffect(() => {
+    if (!runningInTauri || !tabs.length) return;
+
+    const checkOpenFiles = () => {
+      tabsRef.current.forEach((tab) => { void refreshTabIfChanged(tab.id); });
+    };
+    checkOpenFiles();
+    externalFileCheckTimerRef.current = window.setInterval(checkOpenFiles, externalFileCheckIntervalMs);
+
+    return () => {
+      if (externalFileCheckTimerRef.current !== null) {
+        window.clearInterval(externalFileCheckTimerRef.current);
+        externalFileCheckTimerRef.current = null;
+      }
+    };
+  }, [runningInTauri, tabs.length]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() === 'o') { event.preventDefault(); void openMarkdown(); }
@@ -892,7 +987,7 @@ function App() {
         </main>
       </div>
       {showUnsavedDialog ? <Dialog title={t.saveChanges}><p>{t.unsavedChanges(tabs.find((tab) => tab.id === pendingUnsavedTabId)?.file.fileName ?? file?.fileName ?? '')}</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setPendingUnsavedTabId(null); setShowUnsavedDialog(false); }}>{t.cancel}</button><button type="button" onClick={() => void discardChangesAndContinue()}>{t.dontSave}</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? t.saving : t.save}</button></div></Dialog> : null}
-      {showConflictDialog ? <Dialog title={t.fileChangedExternally}><p>{t.fileChangedExternallyDescription}</p><div className="dialog-actions"><button type="button" onClick={() => { setShowConflictDialog(false); setConflictTabId(null); }}>{t.cancel}</button><button type="button" onClick={() => void reloadTab(conflictTabId)}>{t.reload}</button><button className="dialog-primary" type="button" onClick={() => { setShowConflictDialog(false); void saveTab(conflictTabId, true); }} disabled={isSaving}>{t.overwriteSave}</button></div></Dialog> : null}
+      {showConflictDialog ? <Dialog title={t.fileChangedExternally}><p>{t.fileChangedExternallyDescription}</p><div className="dialog-actions"><button type="button" onClick={resolveConflict}>{t.continueEditing}</button><button type="button" onClick={() => void reloadTab(conflictTabId)}>{t.discardChanges}</button><button className="dialog-primary" type="button" onClick={() => void overwriteConflictTab()} disabled={isSaving}>{t.overwriteFile}</button></div></Dialog> : null}
       {tabContextMenu ? <div className="tab-context-menu" role="menu" aria-label={t.tabActions} style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
         <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('current')}>{t.close}</button>
         <button type="button" role="menuitem" onClick={() => runTabContextMenuAction('left')} disabled={tabs.findIndex((tab) => tab.id === (tabContextMenu.tabId ?? activeTabId)) === 0}>{t.closeLeftTabs}</button>
