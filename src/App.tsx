@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
@@ -66,6 +66,9 @@ const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
 const externalFileCheckIntervalMs = 1500;
 const directoryRefreshDelayMs = 400;
 const windowStateStorageKey = 'md-reader-window-state-v1';
+const sidebarWidthStorageKey = 'md-reader-sidebar-width-v1';
+const minimumSidebarWidth = 220;
+const maximumSidebarWidth = 480;
 const minimumWindowWidth = 900;
 const minimumWindowHeight = 640;
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
@@ -204,6 +207,19 @@ function getSavedWindowState(): SavedWindowState | null {
   }
 }
 
+function getSavedSidebarWidth(): number | null {
+  const saved = localStorage.getItem(sidebarWidthStorageKey);
+  if (saved === null) return null;
+  const savedWidth = Number(saved);
+  return Number.isFinite(savedWidth)
+    ? Math.min(maximumSidebarWidth, Math.max(minimumSidebarWidth, Math.round(savedWidth)))
+    : null;
+}
+
+function getDefaultSidebarWidth() {
+  return Math.round(Math.min(360, Math.max(240, window.innerWidth * 0.2)));
+}
+
 function windowStateIsVisible(state: SavedWindowState, monitors: Awaited<ReturnType<typeof availableMonitors>>) {
   const right = state.x + state.width;
   const bottom = state.y + state.height;
@@ -226,6 +242,8 @@ function App() {
   const [language, setLanguage] = useState<Language>(getSavedLanguage);
   const [viewMode, setViewMode] = useState<ViewMode>('reading');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('directory');
+  const [sidebarWidth, setSidebarWidth] = useState(() => getSavedSidebarWidth() ?? getDefaultSidebarWidth());
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [fontSize, setFontSize] = useState(getSavedFontSize);
   const [isOpening, setIsOpening] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -246,6 +264,7 @@ function App() {
   const scrollPositionsRef = useRef<Record<string, ScrollPosition>>(getSavedScrollPositions());
   const scrollSaveTimerRef = useRef<number | null>(null);
   const externalFileCheckTimerRef = useRef<number | null>(null);
+  const refreshingCurrentViewRef = useRef(false);
   const refreshingTabIdsRef = useRef<Set<string>>(new Set());
   const conflictQueueRef = useRef<string[]>([]);
   const activeConflictTabIdRef = useRef<string | null>(null);
@@ -254,10 +273,13 @@ function App() {
   const tabsRef = useRef<DocumentTab[]>([]);
   const activeTabIdRef = useRef<string | null>(null);
   const closeTabQueueRef = useRef<string[]>([]);
+  const pendingHeadingRef = useRef<string | null>(null);
   const directoryProjectsRef = useRef<DirectoryProject[]>([]);
   const directoryRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const refreshingDirectoryPathsRef = useRef<Set<string>>(new Set());
   const pendingDirectoryRefreshesRef = useRef<Set<string>>(new Set());
+  const sidebarWidthRef = useRef(sidebarWidth);
+  const sidebarResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const saveWindowStateRef = useRef<(() => Promise<void>) | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
@@ -274,6 +296,52 @@ function App() {
   tabsRef.current = tabs;
   activeTabIdRef.current = activeTabId;
   directoryProjectsRef.current = directoryProjects;
+  sidebarWidthRef.current = sidebarWidth;
+
+  function updateSidebarWidth(nextWidth: number, persist = false) {
+    const next = Math.min(maximumSidebarWidth, Math.max(minimumSidebarWidth, Math.round(nextWidth)));
+    sidebarWidthRef.current = next;
+    if (persist) localStorage.setItem(sidebarWidthStorageKey, String(next));
+    setSidebarWidth((current) => current === next ? current : next);
+  }
+
+  function handleSidebarResizePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidebarWidthRef.current
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsSidebarResizing(true);
+  }
+
+  function handleSidebarResizePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    updateSidebarWidth(resize.startWidth + event.clientX - resize.startX);
+  }
+
+  function finishSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    sidebarResizeRef.current = null;
+    localStorage.setItem(sidebarWidthStorageKey, String(sidebarWidthRef.current));
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setIsSidebarResizing(false);
+  }
+
+  function handleSidebarResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const step = event.shiftKey ? 40 : 16;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      updateSidebarWidth(sidebarWidthRef.current + (event.key === 'ArrowLeft' ? -step : step), true);
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      updateSidebarWidth(event.key === 'Home' ? minimumSidebarWidth : maximumSidebarWidth, true);
+    }
+  }
 
   function setDraftContent(next: string | ((current: string) => string)) {
     const updated = tabsRef.current.map((tab) => tab.id === activeTabIdRef.current
@@ -583,6 +651,7 @@ function App() {
 
   function changeViewMode(nextViewMode: ViewMode) {
     if (nextViewMode === viewMode) return;
+    if (nextViewMode !== 'reading') pendingHeadingRef.current = null;
     if (viewMode === 'reading') {
       if (scrollSaveTimerRef.current !== null) {
         window.clearTimeout(scrollSaveTimerRef.current);
@@ -645,6 +714,44 @@ function App() {
       // The existing tab is kept when the file is temporarily unavailable.
     } finally {
       refreshingTabIdsRef.current.delete(tabId);
+    }
+  }
+
+  async function refreshCurrentView() {
+    if (refreshingCurrentViewRef.current) return;
+    refreshingCurrentViewRef.current = true;
+    saveCurrentScrollPosition();
+    const currentTabId = activeTabIdRef.current;
+
+    try {
+      if (!runningInTauri) {
+        // In a browser preview there is no desktop file system to query. Still
+        // force the visible trees to re-render while keeping all open tabs.
+        setTabs((current) => current.map((tab) => ({ ...tab })));
+        setDirectoryProjects((current) => current.map((project) => ({ ...project, files: [...project.files] })));
+        return;
+      }
+
+      const directoryPaths = directoryProjectsRef.current.map((project) => project.directoryPath);
+      await Promise.all(directoryPaths.map((directoryPath) => refreshDirectoryProject(directoryPath)));
+
+      if (!currentTabId) return;
+      const target = tabsRef.current.find((tab) => tab.id === currentTabId);
+      if (!target) return;
+
+      const refreshedFile = await invoke<MarkdownFile>('open_reader_path', { filePath: target.file.filePath });
+      const latest = tabsRef.current.find((tab) => tab.id === currentTabId);
+      if (!latest) return;
+
+      const hasLocalChanges = latest.draftContent !== latest.file.content;
+      const diskChanged = refreshedFile.modifiedAt > latest.file.modifiedAt + 0.5
+        || refreshedFile.content !== latest.file.content;
+      updateCurrentFile(refreshedFile, hasLocalChanges);
+      if (hasLocalChanges && diskChanged) enqueueConflict(currentTabId);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t.cannotReload, 'error');
+    } finally {
+      refreshingCurrentViewRef.current = false;
     }
   }
 
@@ -855,8 +962,13 @@ function App() {
   }, [tabContextMenu]);
 
   function scrollToHeading(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActiveHeading(id);
+    if (viewMode === 'source') {
+      pendingHeadingRef.current = id;
+      changeViewMode('reading');
+      return;
+    }
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function handleReadingScroll() {
@@ -936,6 +1048,22 @@ function App() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [file, rendered, viewMode]);
+
+  useEffect(() => {
+    const headingId = pendingHeadingRef.current;
+    if (!headingId || viewMode !== 'reading' || !rendered) return;
+    let frame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        document.getElementById(headingId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        pendingHeadingRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [rendered, viewMode]);
 
   useEffect(() => {
     const article = articleRef.current;
@@ -1146,6 +1274,11 @@ function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'F5') {
+        event.preventDefault();
+        void refreshCurrentView();
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() === 'o') { event.preventDefault(); void openMarkdown(); }
       if (event.key.toLowerCase() === 's') { event.preventDefault(); void saveCurrentFile(); }
@@ -1159,7 +1292,7 @@ function App() {
   const directoryName = file?.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? t.currentDirectory;
 
   return (
-    <div className="app-shell">
+    <div className={isSidebarResizing ? 'app-shell sidebar-resizing' : 'app-shell'} style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
       <header className="titlebar">
         <div className="titlebar-left" aria-hidden="true" />
         <div className="window-title">
@@ -1194,7 +1327,7 @@ function App() {
             </> : null}
             {sidebarTab === 'outline' ? <nav className="toc sidebar-toc" aria-label={t.documentOutline}>
               <span className="eyebrow">{t.outline}</span>
-              {rendered?.headings.length && viewMode === 'reading' ? <TocItems items={rendered.headings} activeId={activeHeading} onSelect={scrollToHeading} /> : <p className="toc-empty">{t.headingsAppearHere}</p>}
+              {rendered?.headings.length ? <TocItems items={rendered.headings} activeId={activeHeading} onSelect={scrollToHeading} /> : <p className="toc-empty">{t.headingsAppearHere}</p>}
             </nav> : null}
             {sidebarTab === 'recent' ? (history.length ? <RecentHistory history={history} isOpening={isOpening} onOpen={openHistoryEntry} onRemove={removeHistory} onClear={() => { localStorage.removeItem('md-reader-history'); setHistory([]); }} language={language} t={t} /> : <p className="toc-empty recent-empty">{t.noRecentDocuments}</p>) : null}
           </div>
@@ -1217,6 +1350,21 @@ function App() {
             </div>
           </div>
         </aside>
+        <div
+          className={isSidebarResizing ? 'sidebar-resizer active' : 'sidebar-resizer'}
+          role="separator"
+          aria-orientation="vertical"
+          aria-valuemin={minimumSidebarWidth}
+          aria-valuemax={maximumSidebarWidth}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={handleSidebarResizePointerDown}
+          onPointerMove={handleSidebarResizePointerMove}
+          onPointerUp={finishSidebarResize}
+          onPointerCancel={finishSidebarResize}
+          onLostPointerCapture={finishSidebarResize}
+          onKeyDown={handleSidebarResizeKeyDown}
+        />
         <main className="reading-pane" ref={readingPaneRef} onScroll={handleReadingScroll}>
           {file ? (
             viewMode === 'source' ? <>
@@ -1366,7 +1514,7 @@ function EditIcon() {
 }
 
 function TocItems({ items, activeId, onSelect }: { items: TableOfContentsItem[]; activeId: string; onSelect: (id: string) => void; }) {
-  return <ol>{items.map((item) => <li key={item.id} className={activeId === item.id ? 'active' : ''} data-level={Math.min(item.level, 3)}><button type="button" onClick={() => onSelect(item.id)} title={item.text}>{item.text}</button></li>)}</ol>;
+  return <ol>{items.map((item) => <li key={item.id} className={activeId === item.id ? 'active' : ''} data-level={Math.min(Math.max(item.level, 1), 6)}><button type="button" onClick={() => onSelect(item.id)} title={item.text}>{item.text}</button></li>)}</ol>;
 }
 
 function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false, t }: { content: string; onChange: (content: string) => void; editorRef: RefObject<HTMLTextAreaElement | null>; onFind: () => void; readOnly?: boolean; t: Translation; }) {

@@ -413,6 +413,44 @@ a:focus-visible {
   background: var(--sidebar-bg);
 }
 
+.sidebar-resizer {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1 / -1;
+  justify-self: end;
+  z-index: 4;
+  width: 8px;
+  margin-right: -4px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.sidebar-resizer::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: transparent;
+  content: '';
+  transform: translateX(-50%);
+  transition: width .12s ease, background-color .12s ease;
+}
+
+.sidebar-resizer:hover::before,
+.sidebar-resizer.active::before,
+.sidebar-resizer:focus-visible::before {
+  width: 3px;
+  background: var(--accent);
+}
+
+.app-shell.sidebar-resizing,
+.app-shell.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .reading-pane {
   grid-column: 2;
   grid-row: 2;
@@ -695,6 +733,18 @@ kbd {
   margin-left: 22px;
 }
 
+.toc li[data-level='4'] {
+  margin-left: 33px;
+}
+
+.toc li[data-level='5'] {
+  margin-left: 44px;
+}
+
+.toc li[data-level='6'] {
+  margin-left: 55px;
+}
+
 .toc li button {
   display: block;
   width: 100%;
@@ -736,16 +786,20 @@ kbd {
 .settings-container {
   position: relative;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 30px;
+  --settings-slot-width: 30px;
+  --settings-slot-gap: 8px;
+  grid-template-columns: minmax(0, 1fr) var(--settings-slot-width);
   align-items: center;
-  gap: 8px;
+  gap: var(--settings-slot-gap);
   width: 100%;
   padding: 10px 4px 0;
   border-top: 1px solid var(--line);
 }
 
 .bottom-open-menu {
-  grid-column: 2;
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: calc(100% - var(--settings-slot-width) - var(--settings-slot-gap) - var(--settings-slot-width) - var(--settings-slot-gap));
   min-width: 0;
 }
 
@@ -793,7 +847,8 @@ kbd {
 
 .settings-popover {
   position: relative;
-  grid-column: 3;
+  grid-column: 2;
+  z-index: 2;
   flex: 0 0 auto;
 }
 
