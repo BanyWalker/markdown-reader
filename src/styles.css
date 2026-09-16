@@ -797,9 +797,8 @@ kbd {
 }
 
 .bottom-open-menu {
-  grid-column: 1 / -1;
-  justify-self: center;
-  width: calc(100% - var(--settings-slot-width) - var(--settings-slot-gap) - var(--settings-slot-width) - var(--settings-slot-gap));
+  grid-column: 1;
+  width: 100%;
   min-width: 0;
 }
 
