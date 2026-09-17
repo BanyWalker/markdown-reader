@@ -72,7 +72,10 @@
   --accent-ink: #242424;
   --sidebar-tab: #62686e;
   --sidebar-tab-active: #565c62;
+  --tab-active-bg: #e7e9eb;
+  --directory-text: #62686e;
   --file-text: #70757a;
+  --file-active-bg: #dfe3e7;
   --code-bg: #f5f5f5;
   --selection: #e2e5e8;
   --shadow: 0 12px 42px rgb(0 0 0 / 5%);
@@ -279,7 +282,7 @@ a:focus-visible {
 
 .document-tab.active {
   border-color: var(--line);
-  background: color-mix(in srgb, var(--paper) 78%, transparent);
+  background: var(--tab-active-bg, color-mix(in srgb, var(--paper) 78%, transparent));
 }
 
 .document-tab > button:first-child {
@@ -578,7 +581,7 @@ kbd {
 .file-list-heading { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-list-items { flex: 1 1 auto; min-height: 0; width: calc(100% + var(--sidebar-gutter) + var(--sidebar-gutter)); margin: 8px calc(-1 * var(--sidebar-gutter)) 0; padding: 0 var(--sidebar-gutter); overflow-x: hidden; overflow-y: auto; }
 .file-list.collapsed .file-list-items { flex: 0 0 auto; }
-.directory-item { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 3px 8px; color: var(--text); font-size: 12px; font-weight: 600; }
+.directory-item { display: flex; align-items: center; gap: 3px; min-width: 0; padding: 3px 8px; color: var(--directory-text, var(--text)); font-size: 12px; font-weight: 600; }
 .directory-node { min-width: 0; }
 .directory-tree-root { width: 100%; min-width: 0; }
 .directory-item { width: 100%; border: 0; border-radius: 5px; background: transparent; cursor: pointer; text-align: left; }
@@ -592,7 +595,8 @@ kbd {
 .directory-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .directory-files { padding-left: 10px; }
 .file-item { display: flex; align-items: center; gap: 3px; min-width: 0; width: 100%; padding: 3px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--file-text, var(--text)); cursor: pointer; font-weight: 450; text-align: left; }
-.file-item:hover, .file-item.active { color: var(--text); background: color-mix(in srgb, var(--accent-soft) 67%, transparent); }
+.file-item:hover { color: var(--text); background: color-mix(in srgb, var(--accent-soft) 67%, transparent); }
+.file-item.active { color: var(--text); background: var(--file-active-bg, color-mix(in srgb, var(--accent-soft) 67%, transparent)); }
 .file-select { display: flex; align-items: center; gap: 3px; flex: 1 1 auto; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .file-item .menu-icon { flex: 0 0 auto; width: 14px; height: 14px; color: var(--muted); }
 .file-item span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1040,6 +1044,29 @@ kbd {
 .reading-pane::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--text) 62%, transparent);
   background-clip: padding-box;
+}
+
+.selection-copy-button {
+  position: fixed;
+  z-index: 12;
+  width: 72px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--line));
+  border-radius: 7px;
+  background: var(--accent);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  transform: translateZ(0);
+}
+
+.selection-copy-button:hover,
+.selection-copy-button:focus-visible {
+  filter: brightness(1.06);
 }
 
 .document-modified-at {

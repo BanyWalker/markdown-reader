@@ -31,6 +31,9 @@ export interface Translation {
   cannotCloseWindow: string;
   cannotOpenLink: string;
   supportedLinks: string;
+  copy: string;
+  copied: string;
+  copyFailed: string;
   currentDirectory: string;
   openDocuments: string;
   unsaved: string;
@@ -133,6 +136,9 @@ export const translations: Record<Language, Translation> = {
     cannotCloseWindow: '无法关闭窗口。',
     cannotOpenLink: '无法打开该链接，请检查默认浏览器设置。',
     supportedLinks: '当前版本仅支持网页链接和文档内锚点。',
+    copy: '复制',
+    copied: '已复制选中文字。',
+    copyFailed: '复制失败，请检查剪贴板权限。',
     currentDirectory: '当前目录',
     openDocuments: '已打开文档',
     unsaved: '未保存',
@@ -233,6 +239,9 @@ export const translations: Record<Language, Translation> = {
     cannotCloseWindow: 'Unable to close the window.',
     cannotOpenLink: 'Unable to open this link. Check your default browser settings.',
     supportedLinks: 'This version supports web links and document anchors only.',
+    copy: 'Copy',
+    copied: 'Selected text copied.',
+    copyFailed: 'Copy failed. Check clipboard permissions.',
     currentDirectory: 'Current directory',
     openDocuments: 'Open documents',
     unsaved: 'Unsaved',

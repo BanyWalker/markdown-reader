@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi';
@@ -23,6 +23,12 @@ interface HistoryEntry {
 interface Toast {
   message: string;
   kind: 'error' | 'info';
+}
+
+interface TextSelectionState {
+  text: string;
+  left: number;
+  top: number;
 }
 
 interface ScrollPosition {
@@ -71,6 +77,9 @@ const minimumSidebarWidth = 220;
 const maximumSidebarWidth = 480;
 const minimumWindowWidth = 900;
 const minimumWindowHeight = 640;
+// Keep the selection copy action available for a later UI iteration without
+// showing the floating button in the current release.
+const showSelectionCopyButton = false;
 const themeOrder: Theme[] = ['white', 'dark', 'light', 'wood'];
 const encodingLabels: Record<string, string> = {
   'UTF-8': 'UTF-8',
@@ -169,6 +178,30 @@ function formatTime(timestamp: number, language: Language, includeYear = false) 
   }).format(timestamp);
 }
 
+async function writeClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the legacy copy command when clipboard permissions are unavailable.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '0';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard write failed.');
+}
+
 interface SavedWindowState {
   x: number;
   y: number;
@@ -247,6 +280,7 @@ function App() {
   const [fontSize, setFontSize] = useState(getSavedFontSize);
   const [isOpening, setIsOpening] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [textSelection, setTextSelection] = useState<TextSelectionState | null>(null);
   const [activeHeading, setActiveHeading] = useState('');
   const [progress, setProgress] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -388,9 +422,71 @@ function App() {
       : renderMarkdown(draftContent, file.directoryPath, language);
   }, [draftContent, file, language]);
 
+  // Keep the markup object stable between unrelated state updates (for example,
+  // reading-pane scroll progress updates). Otherwise React rewrites innerHTML,
+  // replaces the text nodes, and the browser loses the native selection range.
+  const renderedMarkup = useMemo(() => ({ __html: rendered?.html ?? '' }), [rendered?.html]);
+
   function showToast(message: string, kind: Toast['kind'] = 'info') {
     setToast({ message, kind });
     window.setTimeout(() => setToast(null), 3600);
+  }
+
+  const updateTextSelection = useCallback(() => {
+    const article = articleRef.current;
+    const pane = readingPaneRef.current;
+    const selection = window.getSelection();
+    if (!article || !pane || !selection || selection.isCollapsed || !selection.rangeCount) {
+      setTextSelection(null);
+      return;
+    }
+
+    const isInsideArticle = (node: Node | null) => {
+      if (!node) return false;
+      const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+      return Boolean(element && article.contains(element));
+    };
+    const text = selection.toString();
+    if (!text.trim() || !isInsideArticle(selection.anchorNode) || !isInsideArticle(selection.focusNode)) {
+      setTextSelection(null);
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rangeRect = range.getBoundingClientRect();
+    const rects = Array.from(range.getClientRects());
+    const rect = rangeRect.width || rangeRect.height ? rangeRect : rects.at(-1);
+    if (!rect || (!rect.width && !rect.height)) {
+      setTextSelection(null);
+      return;
+    }
+
+    const buttonWidth = 72;
+    const buttonHeight = 32;
+    const edge = 8;
+    const gap = 7;
+    let left = rect.right + gap;
+    if (left + buttonWidth > window.innerWidth - edge) left = rect.left - buttonWidth - gap;
+    left = Math.min(Math.max(edge, left), Math.max(edge, window.innerWidth - buttonWidth - edge));
+    let top = rect.top - buttonHeight - gap;
+    if (top < edge) top = rect.bottom + gap;
+    top = Math.min(Math.max(edge, top), Math.max(edge, window.innerHeight - buttonHeight - edge));
+
+    setTextSelection((current) => current?.text === text && current.left === left && current.top === top
+      ? current
+      : { text, left, top });
+  }, []);
+
+  async function copySelectedText() {
+    const selection = textSelection;
+    if (!selection) return;
+    try {
+      await writeClipboardText(selection.text);
+      setTextSelection(null);
+      showToast(t.copied);
+    } catch {
+      showToast(t.copyFailed, 'error');
+    }
   }
 
   function recordHistory(entry: Omit<HistoryEntry, 'accessedAt'>) {
@@ -503,11 +599,27 @@ function App() {
   function upsertDirectoryProject(directoryPath: string, files: MarkdownFile[], revealActiveDirectory: boolean) {
     const id = normalizeFilePath(directoryPath);
     setDirectoryProjects((current) => {
-      const existing = current.find((project) => normalizeFilePath(project.directoryPath) === id);
-      const next = existing ? current.map((project) => normalizeFilePath(project.directoryPath) === id
-        ? { ...project, files, revealActiveDirectory: project.revealActiveDirectory || revealActiveDirectory }
-        : project)
-        : [...current, { directoryPath, files, revealActiveDirectory }];
+      const parentProject = current
+        .filter((project) => isDirectoryWithin(directoryPath, project.directoryPath))
+        .sort((first, second) => normalizeFilePath(first.directoryPath).length - normalizeFilePath(second.directoryPath).length)[0];
+      let next: DirectoryProject[];
+
+      if (parentProject) {
+        const mergedFiles = mergeDirectoryFiles(parentProject.files, files, directoryPath);
+        const parentId = normalizeFilePath(parentProject.directoryPath);
+        next = current
+          .filter((project) => !isDirectoryWithin(project.directoryPath, parentProject.directoryPath))
+          .map((project) => normalizeFilePath(project.directoryPath) === parentId
+            ? { ...project, files: mergedFiles, revealActiveDirectory: project.revealActiveDirectory || revealActiveDirectory }
+            : project);
+      } else {
+        const withoutChildren = current.filter((project) => !isDirectoryWithin(project.directoryPath, directoryPath));
+        const existing = withoutChildren.find((project) => normalizeFilePath(project.directoryPath) === id);
+        next = existing ? withoutChildren.map((project) => normalizeFilePath(project.directoryPath) === id
+          ? { ...project, files, revealActiveDirectory: project.revealActiveDirectory || revealActiveDirectory }
+          : project)
+          : [...withoutChildren, { directoryPath, files, revealActiveDirectory }];
+      }
       directoryProjectsRef.current = next;
       return next;
     });
@@ -572,12 +684,13 @@ function App() {
   }
 
   function displayDirectory(directory: MarkdownDirectory, shouldRecord = true) {
-    upsertDirectoryProject(directory.directoryPath, directory.files, false);
+    const firstVisibleFile = getDefaultDirectoryFile(directory.files, directory.directoryPath);
+    upsertDirectoryProject(directory.directoryPath, directory.files, true);
     setSidebarTab('directory');
     if (directory.skippedFiles > 0) {
       showToast(t.skippedFiles(directory.skippedFiles), 'info');
     }
-    if (directory.files[0]) openTabNow(directory.files[0], false);
+    if (firstVisibleFile) openTabNow(firstVisibleFile, false);
     if (shouldRecord) {
       const name = directory.directoryPath.split(/[\\/]/).filter(Boolean).pop() ?? directory.directoryPath;
       recordHistory({ path: directory.directoryPath, name, kind: 'directory' });
@@ -1021,6 +1134,28 @@ function App() {
   }, [activeTabId, tabs.length]);
 
   useEffect(() => {
+    if (!showSelectionCopyButton || viewMode !== 'reading' || !file || !rendered) {
+      setTextSelection(null);
+      return;
+    }
+
+    const handleSelectionChange = () => updateTextSelection();
+    const pane = readingPaneRef.current;
+    document.addEventListener('selectionchange', handleSelectionChange);
+    document.addEventListener('pointerup', handleSelectionChange);
+    document.addEventListener('keyup', handleSelectionChange);
+    pane?.addEventListener('scroll', handleSelectionChange, { passive: true });
+    window.addEventListener('resize', handleSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange);
+      document.removeEventListener('pointerup', handleSelectionChange);
+      document.removeEventListener('keyup', handleSelectionChange);
+      pane?.removeEventListener('scroll', handleSelectionChange);
+      window.removeEventListener('resize', handleSelectionChange);
+    };
+  }, [file, rendered, updateTextSelection, viewMode]);
+
+  useEffect(() => {
     if (!file || viewMode !== 'reading' || !rendered) return;
     const restoreKey = `${normalizeFilePath(file.filePath)}:${file.modifiedAt}`;
     if (restoredDocumentRef.current === restoreKey) return;
@@ -1372,9 +1507,10 @@ function App() {
               {isFindOpen ? <div className="find-bar"><input value={findQuery} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') findNextInSource(); if (event.key === 'Escape') setIsFindOpen(false); }} placeholder={t.find} aria-label={t.findSource} autoFocus /><button type="button" onClick={findNextInSource}>{t.next}</button><button type="button" onClick={() => setIsFindOpen(false)} aria-label={t.closeFind}>×</button></div> : null}
             </> : rendered ? <>
               <div className="document-modified-at" aria-label={t.lastModifiedAt(formatTime(file.modifiedAt, language, true))}>{t.lastModified}{formatTime(file.modifiedAt, language, true)}</div>
-              <article ref={articleRef} className="markdown-body" style={{ '--reader-font-size': `${fontSize}px` } as CSSProperties} onClick={handleArticleClick} dangerouslySetInnerHTML={{ __html: rendered.html }} />
+              <article ref={articleRef} className="markdown-body" style={{ '--reader-font-size': `${fontSize}px` } as CSSProperties} onClick={handleArticleClick} dangerouslySetInnerHTML={renderedMarkup} />
             </> : null
           ) : <EmptyState onOpen={openMarkdown} isOpening={isOpening} t={t} />}
+          {showSelectionCopyButton && textSelection ? <button className="selection-copy-button" type="button" style={{ left: textSelection.left, top: textSelection.top }} onMouseDown={(event) => event.preventDefault()} onClick={() => void copySelectedText()}>{t.copy}</button> : null}
         </main>
       </div>
       {showUnsavedDialog ? <Dialog title={t.saveChanges}><p>{t.unsavedChanges(tabs.find((tab) => tab.id === pendingUnsavedTabId)?.file.fileName ?? file?.fileName ?? '')}</p><div className="dialog-actions"><button type="button" onClick={() => { pendingDocumentActionRef.current = null; setPendingUnsavedTabId(null); setShowUnsavedDialog(false); }}>{t.cancel}</button><button type="button" onClick={() => void discardChangesAndContinue()}>{t.dontSave}</button><button className="dialog-primary" type="button" onClick={() => void saveChangesAndContinue()} disabled={isSaving}>{isSaving ? t.saving : t.save}</button></div></Dialog> : null}
@@ -1409,6 +1545,40 @@ function getRelativePath(file: MarkdownFile, directoryPath: string) {
   return relativePath === file.filePath ? file.fileName : relativePath;
 }
 
+function isFileInsideDotDirectory(file: MarkdownFile, directoryPath: string) {
+  const parts = getRelativeFilePath(file.filePath, directoryPath).split(/[\\/]/).filter(Boolean);
+  return parts.slice(0, -1).some((part) => part.startsWith('.'));
+}
+
+function isDirectoryWithin(childPath: string, parentPath: string) {
+  const child = normalizeFilePath(childPath).replace(/[\\]+$/, '');
+  const parent = normalizeFilePath(parentPath).replace(/[\\]+$/, '');
+  return child !== parent && child.startsWith(`${parent}\\`);
+}
+
+function mergeDirectoryFiles(existingFiles: MarkdownFile[], updatedFiles: MarkdownFile[], updatedDirectoryPath: string) {
+  const updatedDirectoryPrefix = `${normalizeFilePath(updatedDirectoryPath).replace(/[\\]+$/, '')}\\`;
+  const filesByPath = new Map(existingFiles
+    .filter((file) => !normalizeFilePath(file.filePath).startsWith(updatedDirectoryPrefix))
+    .map((file) => [normalizeFilePath(file.filePath), file]));
+  updatedFiles.forEach((file) => filesByPath.set(normalizeFilePath(file.filePath), file));
+  return Array.from(filesByPath.values()).sort((first, second) => normalizeFilePath(first.filePath).localeCompare(normalizeFilePath(second.filePath)));
+}
+
+function getDirectoryFileDepth(file: MarkdownFile, directoryPath: string) {
+  const parts = getRelativeFilePath(file.filePath, directoryPath).split(/[\\/]/).filter(Boolean);
+  return Math.max(0, parts.length - 1);
+}
+
+function getDefaultDirectoryFile(files: MarkdownFile[], directoryPath: string) {
+  return files
+    .filter((file) => !file.fileName.startsWith('.') && !isFileInsideDotDirectory(file, directoryPath))
+    .reduce<MarkdownFile | undefined>((current, file) => {
+      if (!current || getDirectoryFileDepth(file, directoryPath) < getDirectoryFileDepth(current, directoryPath)) return file;
+      return current;
+    }, undefined);
+}
+
 function buildDirectoryTree(files: MarkdownFile[], directoryPath: string): DirectoryTreeNode {
   const root: DirectoryTreeNode = { name: '', path: '', directories: [], files: [] };
   const directoriesByPath = new Map<string, DirectoryTreeNode>();
@@ -1434,10 +1604,9 @@ function buildDirectoryTree(files: MarkdownFile[], directoryPath: string): Direc
 
 function getInitialExpandedDirectories(directoryPath: string, activePath: string | undefined, revealActiveDirectory: boolean) {
   const saved = getSavedDirectoryExpansions()[normalizeFilePath(directoryPath)];
-  if (saved) return saved;
-  if (!revealActiveDirectory || !activePath) return {};
+  const expansion = saved ? { ...saved } : {};
+  if (!revealActiveDirectory || !activePath) return expansion;
   const parts = getRelativeFilePath(activePath, directoryPath).split(/[\\/]/).filter(Boolean);
-  const expansion: Record<string, boolean> = {};
   let path = '';
   parts.slice(0, -1).forEach((part) => {
     path = path ? `${path}/${part}` : part;
@@ -1448,6 +1617,7 @@ function getInitialExpandedDirectories(directoryPath: string, activePath: string
 
 function FileList({ files, directoryName, directoryPath, activePath, revealActiveDirectory, onSelect, onReveal, t }: { files: MarkdownFile[]; directoryName: string; directoryPath: string; activePath?: string; revealActiveDirectory: boolean; onSelect: (file: MarkdownFile) => void; onReveal: (file: MarkdownFile) => void; t: Translation; }) {
   const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(() => getInitialExpandedDirectories(directoryPath, activePath, revealActiveDirectory));
+  const activeFileRef = useRef<HTMLDivElement>(null);
   const expansionSignatureRef = useRef('');
   const tree = useMemo(() => buildDirectoryTree(files, directoryPath), [files, directoryPath]);
 
@@ -1457,6 +1627,14 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
     expansionSignatureRef.current = signature;
     setExpandedDirectories(getInitialExpandedDirectories(directoryPath, activePath, revealActiveDirectory));
   }, [activePath, directoryPath, revealActiveDirectory]);
+
+  useLayoutEffect(() => {
+    if (!activePath || !revealActiveDirectory) return;
+    const frame = window.requestAnimationFrame(() => {
+      activeFileRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePath, expandedDirectories, revealActiveDirectory, tree]);
 
   function toggleDirectory(path: string) {
     setExpandedDirectories((current) => {
@@ -1470,7 +1648,7 @@ function FileList({ files, directoryName, directoryPath, activePath, revealActiv
     const paddingLeft = level === 0 ? 0 : directoryIconOffset + (level - 1) * directoryIndentSize;
     return items.map((item) => {
       const isActive = item.filePath === activePath;
-      return <div key={item.filePath} className={isActive ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${paddingLeft}px` }}><button className="file-select" type="button" onClick={() => onSelect(item)} title={item.filePath}><FileIcon /><span>{item.fileName}</span></button>{isActive ? <button className="file-reveal" type="button" onClick={() => onReveal(item)} aria-label={t.revealFile(item.fileName)} title={t.revealFileTitle}><RevealIcon /></button> : null}</div>;
+      return <div ref={isActive ? activeFileRef : undefined} key={item.filePath} className={isActive ? 'file-item active' : 'file-item'} style={{ paddingLeft: `${paddingLeft}px` }}><button className="file-select" type="button" onClick={() => onSelect(item)} title={item.filePath}><FileIcon /><span>{item.fileName}</span></button>{isActive ? <button className="file-reveal" type="button" onClick={() => onReveal(item)} aria-label={t.revealFile(item.fileName)} title={t.revealFileTitle}><RevealIcon /></button> : null}</div>;
     });
   }
 
