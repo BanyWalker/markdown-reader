@@ -1696,7 +1696,10 @@ function TocItems({ items, activeId, onSelect }: { items: TableOfContentsItem[];
 }
 
 function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false, t }: { content: string; onChange: (content: string) => void; editorRef: RefObject<HTMLTextAreaElement | null>; onFind: () => void; readOnly?: boolean; t: Translation; }) {
-  const lineNumbers = Array.from({ length: content.split('\n').length }, (_, index) => index + 1).join('\n');
+  // Text files can use LF, CRLF, or legacy standalone CR line endings. The
+  // textarea renders all of them as line breaks, so the gutter must count the
+  // same way or its numbers can stop before the rest of the document.
+  const lineNumbers = Array.from({ length: content.split(/\r\n|\r|\n/).length }, (_, index) => index + 1).join('\n');
   const lineNumbersRef = useRef<HTMLPreElement>(null);
 
   function resizeEditor() {
