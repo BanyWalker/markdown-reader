@@ -63,12 +63,7 @@ function renderECharts(element: HTMLElement, theme: PreviewTheme, language: Lang
 }
 
 async function renderMermaid(element: HTMLElement, theme: PreviewTheme, language: Language) {
-  const source = readSource(element, 'mermaidSource', language);
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: theme === 'dark' ? 'dark' : 'default'
-  });
+  const source = readSource(element, 'mermaidSource', language).trim();
   const id = `md-reader-mermaid-${++mermaidSequence}`;
   const { svg } = await mermaid.render(id, source);
   if (element.isConnected) {
@@ -81,6 +76,20 @@ async function renderMermaid(element: HTMLElement, theme: PreviewTheme, language
 export function renderVisualPreviews(root: HTMLElement, theme: PreviewTheme, language: Language) {
   const t = translations[language];
   const cleanups: Array<() => void> = [];
+
+  // Mermaid's default HTML labels are rendered with <foreignObject>. Those
+  // nodes are intentionally removed by the SVG sanitizer, which leaves
+  // diagrams blank or with missing labels. Use native SVG text labels so the
+  // sanitized output remains complete and safe.
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: theme === 'dark' ? 'dark' : 'default',
+    flowchart: {
+      htmlLabels: false,
+      useMaxWidth: true
+    }
+  });
 
   root.querySelectorAll<HTMLElement>('.echarts-preview').forEach((element) => {
     try {

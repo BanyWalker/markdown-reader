@@ -36,8 +36,10 @@ interface ScrollPosition {
   modifiedAt: number;
   scrollTop: number;
   progress: number;
+  mode?: ViewMode;
   anchorId?: string;
   anchorOffset?: number;
+  sourceLine?: number;
   updatedAt: number;
 }
 
@@ -176,6 +178,31 @@ function formatTime(timestamp: number, language: Language, includeYear = false) 
     hour: '2-digit',
     minute: '2-digit'
   }).format(timestamp);
+}
+
+function splitSourceLines(content: string) {
+  return content.split(/\r\n|\r|\n/);
+}
+
+function normalizeHeadingText(value: string) {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[\\`*_~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function getSourceHeadingLine(content: string, heading: TableOfContentsItem) {
+  const target = normalizeHeadingText(heading.text);
+  const lines = splitSourceLines(content);
+  const headingPattern = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/;
+  return lines.findIndex((line) => {
+    const match = line.match(headingPattern);
+    if (!match || match[1].length !== heading.level) return false;
+    return normalizeHeadingText(match[2]) === target;
+  });
 }
 
 async function writeClipboardText(text: string) {
@@ -506,22 +533,80 @@ function App() {
     localStorage.setItem(scrollPositionStorageKey, JSON.stringify(scrollPositionsRef.current));
   }
 
+  function getSourceLayout() {
+    const pane = readingPaneRef.current;
+    const editor = sourceEditorRef.current;
+    const sourceEditor = editor?.closest<HTMLElement>('.source-editor');
+    if (!pane || !editor || !sourceEditor) return null;
+
+    const paneRect = pane.getBoundingClientRect();
+    const sourceEditorRect = sourceEditor.getBoundingClientRect();
+    const sourceEditorStyle = getComputedStyle(sourceEditor);
+    const editorStyle = getComputedStyle(editor);
+    const lineHeight = Number.parseFloat(editorStyle.lineHeight)
+      || Number.parseFloat(sourceEditorStyle.lineHeight)
+      || 22;
+    const topPadding = (Number.parseFloat(sourceEditorStyle.paddingTop) || 0)
+      + (Number.parseFloat(editorStyle.paddingTop) || 0);
+    const documentTop = sourceEditorRect.top - paneRect.top + pane.scrollTop;
+    return { pane, lineHeight, topPadding, documentTop };
+  }
+
+  function getSourceHeadingPositions() {
+    if (!rendered) return [];
+    const layout = getSourceLayout();
+    if (!layout) return [];
+    return rendered.headings.flatMap((heading) => {
+      const line = getSourceHeadingLine(draftContent, heading);
+      return line >= 0
+        ? [{ heading, line, top: layout.documentTop + layout.topPadding + line * layout.lineHeight }]
+        : [];
+    });
+  }
+
+  function getActiveSourceHeading() {
+    const layout = getSourceLayout();
+    if (!layout) return undefined;
+    return getSourceHeadingPositions()
+      .filter((item) => item.top <= layout.pane.scrollTop + 120)
+      .at(-1);
+  }
+
   function saveCurrentScrollPosition() {
     const pane = readingPaneRef.current;
-    if (!pane || !file || !rendered || viewMode !== 'reading') return;
+    if (!pane || !file || !rendered) return;
     const scrollableHeight = pane.scrollHeight - pane.clientHeight;
-    const paneTop = pane.getBoundingClientRect().top;
-    const active = rendered.headings
-      .map((heading) => ({ element: document.getElementById(heading.id), id: heading.id }))
-      .map((heading) => ({ ...heading, top: heading.element?.getBoundingClientRect().top ?? Infinity }))
-      .filter((heading) => heading.top <= paneTop + 120)
-      .at(-1);
+    let activeId: string | undefined;
+    let anchorOffset: number | undefined;
+    let sourceLine: number | undefined;
+
+    if (viewMode === 'reading') {
+      const paneTop = pane.getBoundingClientRect().top;
+      const active = rendered.headings
+        .map((heading) => ({ element: document.getElementById(heading.id), id: heading.id }))
+        .map((heading) => ({ ...heading, top: heading.element?.getBoundingClientRect().top ?? Infinity }))
+        .filter((heading) => heading.top <= paneTop + 120)
+        .at(-1);
+      activeId = active?.id;
+      anchorOffset = active ? active.top - paneTop : undefined;
+    } else {
+      const active = getActiveSourceHeading();
+      activeId = active?.heading.id;
+      sourceLine = active?.line;
+      const layout = getSourceLayout();
+      anchorOffset = active && layout ? active.top - pane.scrollTop : undefined;
+    }
+
+    if (activeId) setActiveHeading((current) => current === activeId ? current : activeId!);
     scrollPositionsRef.current[normalizeFilePath(file.filePath)] = {
       filePath: file.filePath,
       modifiedAt: file.modifiedAt,
       scrollTop: pane.scrollTop,
       progress: scrollableHeight > 0 ? pane.scrollTop / scrollableHeight : 0,
-      ...(active ? { anchorId: active.id, anchorOffset: active.top - paneTop } : {}),
+      mode: viewMode,
+      ...(activeId ? { anchorId: activeId } : {}),
+      ...(anchorOffset !== undefined ? { anchorOffset } : {}),
+      ...(sourceLine !== undefined ? { sourceLine } : {}),
       updatedAt: Date.now()
     };
     persistScrollPositions();
@@ -765,14 +850,12 @@ function App() {
   function changeViewMode(nextViewMode: ViewMode) {
     if (nextViewMode === viewMode) return;
     if (nextViewMode !== 'reading') pendingHeadingRef.current = null;
-    if (viewMode === 'reading') {
-      if (scrollSaveTimerRef.current !== null) {
-        window.clearTimeout(scrollSaveTimerRef.current);
-        scrollSaveTimerRef.current = null;
-      }
-      saveCurrentScrollPosition();
+    if (scrollSaveTimerRef.current !== null) {
+      window.clearTimeout(scrollSaveTimerRef.current);
+      scrollSaveTimerRef.current = null;
     }
-    if (nextViewMode === 'reading') restoredDocumentRef.current = null;
+    saveCurrentScrollPosition();
+    restoredDocumentRef.current = null;
     setViewMode(nextViewMode);
     if (nextViewMode === 'reading') setIsFindOpen(false);
   }
@@ -1084,16 +1167,21 @@ function App() {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  function handleReadingScroll() {
+  function handlePaneScroll() {
     const pane = readingPaneRef.current;
-    if (!pane || !rendered || viewMode !== 'reading') return;
+    if (!pane || !rendered) return;
     const scrollableHeight = pane.scrollHeight - pane.clientHeight;
     setProgress(scrollableHeight > 0 ? (pane.scrollTop / scrollableHeight) * 100 : 0);
-    const paneTop = pane.getBoundingClientRect().top;
-    const visibleHeadings = rendered.headings
-      .map((heading) => ({ id: heading.id, top: document.getElementById(heading.id)?.getBoundingClientRect().top ?? Infinity }))
-      .filter((heading) => heading.top <= paneTop + 120);
-    if (visibleHeadings.length) setActiveHeading(visibleHeadings[visibleHeadings.length - 1].id);
+    if (viewMode === 'reading') {
+      const paneTop = pane.getBoundingClientRect().top;
+      const visibleHeadings = rendered.headings
+        .map((heading) => ({ id: heading.id, top: document.getElementById(heading.id)?.getBoundingClientRect().top ?? Infinity }))
+        .filter((heading) => heading.top <= paneTop + 120);
+      if (visibleHeadings.length) setActiveHeading(visibleHeadings[visibleHeadings.length - 1].id);
+    } else {
+      const active = getActiveSourceHeading();
+      if (active) setActiveHeading(active.heading.id);
+    }
     scheduleScrollPositionSave();
   }
 
@@ -1156,8 +1244,8 @@ function App() {
   }, [file, rendered, updateTextSelection, viewMode]);
 
   useEffect(() => {
-    if (!file || viewMode !== 'reading' || !rendered) return;
-    const restoreKey = `${normalizeFilePath(file.filePath)}:${file.modifiedAt}`;
+    if (!file || !rendered) return;
+    const restoreKey = `${normalizeFilePath(file.filePath)}:${file.modifiedAt}:${viewMode}`;
     if (restoredDocumentRef.current === restoreKey) return;
     restoredDocumentRef.current = restoreKey;
 
@@ -1168,11 +1256,20 @@ function App() {
         if (!pane || !position) return;
         const scrollableHeight = pane.scrollHeight - pane.clientHeight;
         let targetPosition = position.scrollTop;
+        const positionMode = position.mode ?? 'reading';
+        const modeChanged = positionMode !== viewMode;
 
-        if (position.modifiedAt !== file.modifiedAt) {
+        if (viewMode === 'reading' && (modeChanged || position.modifiedAt !== file.modifiedAt)) {
           const anchor = position.anchorId ? document.getElementById(position.anchorId) : null;
           targetPosition = anchor && Number.isFinite(position.anchorOffset)
             ? pane.scrollTop + anchor.getBoundingClientRect().top - pane.getBoundingClientRect().top - position.anchorOffset!
+            : position.progress * scrollableHeight;
+        } else if (viewMode === 'source' && (modeChanged || position.modifiedAt !== file.modifiedAt)) {
+          const sourceAnchor = position.anchorId
+            ? getSourceHeadingPositions().find((item) => item.heading.id === position.anchorId)
+            : undefined;
+          targetPosition = sourceAnchor && Number.isFinite(position.anchorOffset)
+            ? sourceAnchor.top - position.anchorOffset!
             : position.progress * scrollableHeight;
         }
 
@@ -1500,7 +1597,7 @@ function App() {
           onLostPointerCapture={finishSidebarResize}
           onKeyDown={handleSidebarResizeKeyDown}
         />
-        <main className="reading-pane" ref={readingPaneRef} onScroll={handleReadingScroll}>
+        <main className="reading-pane" ref={readingPaneRef} onScroll={handlePaneScroll}>
           {file ? (
             viewMode === 'source' ? <>
               <SourceEditor content={draftContent} onChange={setDraftContent} editorRef={sourceEditorRef} onFind={() => setIsFindOpen(true)} readOnly={file.isReadOnly} t={t} />
@@ -1692,7 +1789,13 @@ function EditIcon() {
 }
 
 function TocItems({ items, activeId, onSelect }: { items: TableOfContentsItem[]; activeId: string; onSelect: (id: string) => void; }) {
-  return <ol>{items.map((item) => <li key={item.id} className={activeId === item.id ? 'active' : ''} data-level={Math.min(Math.max(item.level, 1), 6)}><button type="button" onClick={() => onSelect(item.id)} title={item.text}>{item.text}</button></li>)}</ol>;
+  const activeItemRef = useRef<HTMLLIElement>(null);
+
+  useLayoutEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [activeId]);
+
+  return <ol>{items.map((item) => <li ref={activeId === item.id ? activeItemRef : undefined} key={item.id} className={activeId === item.id ? 'active' : ''} data-level={Math.min(Math.max(item.level, 1), 6)}><button type="button" onClick={() => onSelect(item.id)} title={item.text}>{item.text}</button></li>)}</ol>;
 }
 
 function SourceEditor({ content, onChange, editorRef, onFind, readOnly = false, t }: { content: string; onChange: (content: string) => void; editorRef: RefObject<HTMLTextAreaElement | null>; onFind: () => void; readOnly?: boolean; t: Translation; }) {
