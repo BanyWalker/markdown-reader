@@ -1253,7 +1253,16 @@ function App() {
       window.requestAnimationFrame(() => {
         const pane = readingPaneRef.current;
         const position = scrollPositionsRef.current[normalizeFilePath(file.filePath)];
-        if (!pane || !position) return;
+        if (!pane) return;
+        if (!position) {
+          // The reading pane is reused when switching tabs. A document with
+          // no saved position must start at the beginning instead of inheriting
+          // the previous document's scrollTop.
+          pane.scrollTop = 0;
+          setProgress(0);
+          setActiveHeading('');
+          return;
+        }
         const scrollableHeight = pane.scrollHeight - pane.clientHeight;
         let targetPosition = position.scrollTop;
         const positionMode = position.mode ?? 'reading';
