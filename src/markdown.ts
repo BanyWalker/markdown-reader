@@ -99,6 +99,37 @@ function normalizeAutoLinks(document: Document) {
   });
 }
 
+function restoreTableLineBreaks(document: Document) {
+  document.querySelectorAll<HTMLElement>('td, th').forEach((cell) => {
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+    const textNodes: Text[] = [];
+    let currentNode = walker.nextNode();
+    while (currentNode) {
+      textNodes.push(currentNode as Text);
+      currentNode = walker.nextNode();
+    }
+
+    textNodes.forEach((textNode) => {
+      if (textNode.parentElement?.closest('code, pre')) return;
+      const value = textNode.nodeValue ?? '';
+      const lineBreak = /<br\s*\/?>/gi;
+      if (!lineBreak.test(value)) return;
+
+      lineBreak.lastIndex = 0;
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      let match: RegExpExecArray | null;
+      while ((match = lineBreak.exec(value))) {
+        if (match.index > cursor) fragment.append(document.createTextNode(value.slice(cursor, match.index)));
+        fragment.append(document.createElement('br'));
+        cursor = match.index + match[0].length;
+      }
+      if (cursor < value.length) fragment.append(document.createTextNode(value.slice(cursor)));
+      textNode.replaceWith(fragment);
+    });
+  });
+}
+
 function highlightCode(code: string, language: string) {
   if (language && hljs.getLanguage(language)) {
     try {
@@ -207,6 +238,7 @@ export function renderMarkdown(source: string, baseDirectory: string, language: 
 
   const documentFragment = new DOMParser().parseFromString(sanitizedHtml, 'text/html');
   normalizeAutoLinks(documentFragment);
+  restoreTableLineBreaks(documentFragment);
   const html = documentFragment.body.innerHTML;
   const headings = Array.from(
     documentFragment.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')

@@ -335,6 +335,8 @@ function App() {
   const activeTabIdRef = useRef<string | null>(null);
   const closeTabQueueRef = useRef<string[]>([]);
   const pendingHeadingRef = useRef<string | null>(null);
+  const programmaticHeadingRef = useRef<string | null>(null);
+  const programmaticHeadingTimerRef = useRef<number | null>(null);
   const directoryProjectsRef = useRef<DirectoryProject[]>([]);
   const directoryRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const refreshingDirectoryPathsRef = useRef<Set<string>>(new Set());
@@ -1164,7 +1166,26 @@ function App() {
       changeViewMode('reading');
       return;
     }
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    scrollReadingToHeading(id);
+  }
+
+  function scrollReadingToHeading(id: string) {
+    const pane = readingPaneRef.current;
+    const heading = document.getElementById(id);
+    if (!pane || !heading) return;
+
+    programmaticHeadingRef.current = id;
+    if (programmaticHeadingTimerRef.current !== null) window.clearTimeout(programmaticHeadingTimerRef.current);
+    programmaticHeadingTimerRef.current = window.setTimeout(() => {
+      programmaticHeadingTimerRef.current = null;
+      if (programmaticHeadingRef.current === id) programmaticHeadingRef.current = null;
+      handlePaneScroll();
+    }, 1000);
+
+    const targetPosition = pane.scrollTop
+      + heading.getBoundingClientRect().top
+      - pane.getBoundingClientRect().top;
+    pane.scrollTo({ top: Math.max(0, targetPosition), behavior: 'smooth' });
   }
 
   function handlePaneScroll() {
@@ -1173,11 +1194,15 @@ function App() {
     const scrollableHeight = pane.scrollHeight - pane.clientHeight;
     setProgress(scrollableHeight > 0 ? (pane.scrollTop / scrollableHeight) * 100 : 0);
     if (viewMode === 'reading') {
+      const programmaticHeading = programmaticHeadingRef.current;
+      if (programmaticHeading) {
+        setActiveHeading(programmaticHeading);
+      }
       const paneTop = pane.getBoundingClientRect().top;
       const visibleHeadings = rendered.headings
         .map((heading) => ({ id: heading.id, top: document.getElementById(heading.id)?.getBoundingClientRect().top ?? Infinity }))
         .filter((heading) => heading.top <= paneTop + 120);
-      if (visibleHeadings.length) setActiveHeading(visibleHeadings[visibleHeadings.length - 1].id);
+      if (!programmaticHeading && visibleHeadings.length) setActiveHeading(visibleHeadings[visibleHeadings.length - 1].id);
     } else {
       const active = getActiveSourceHeading();
       if (active) setActiveHeading(active.heading.id);
@@ -1296,7 +1321,7 @@ function App() {
     let frame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       frame = window.requestAnimationFrame(() => {
-        document.getElementById(headingId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        scrollReadingToHeading(headingId);
         pendingHeadingRef.current = null;
       });
     });
