@@ -84,6 +84,7 @@ export function renderVisualPreviews(root: HTMLElement, theme: PreviewTheme, lan
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
+    htmlLabels: false,
     theme: theme === 'dark' ? 'dark' : 'default',
     flowchart: {
       htmlLabels: false,

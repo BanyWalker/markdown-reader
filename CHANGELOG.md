@@ -2,6 +2,13 @@
 
 ## 未发布
 
+## [0.1.12] - 2026-10-02
+
+### Fixed
+
+- Restored the previous session when launching from the desktop shortcut.
+- Kept file association launches focused on the file supplied by Windows.
+
 ## [0.1.11] - 2026-09-23
 
 ### Fixes

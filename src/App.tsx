@@ -74,6 +74,7 @@ const directoryExpansionStorageKey = 'md-reader-directory-expansions-v1';
 const externalFileCheckIntervalMs = 1500;
 const directoryRefreshDelayMs = 400;
 const windowStateStorageKey = 'md-reader-window-state-v1';
+const sessionStateStorageKey = 'md-reader-session-v1';
 const sidebarWidthStorageKey = 'md-reader-sidebar-width-v1';
 const minimumSidebarWidth = 220;
 const maximumSidebarWidth = 480;
@@ -238,6 +239,39 @@ interface SavedWindowState {
   fullscreen: boolean;
 }
 
+interface SavedSessionState {
+  tabPaths: string[];
+  directoryPaths: string[];
+  activeFilePath: string | null;
+  viewMode: ViewMode;
+  sidebarTab: SidebarTab;
+}
+
+function getSavedSessionState(): SavedSessionState | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(sessionStateStorageKey) ?? 'null') as Partial<SavedSessionState> | null;
+    if (!parsed || !Array.isArray(parsed.tabPaths)) return null;
+    const tabPaths = parsed.tabPaths
+      .filter((path): path is string => typeof path === 'string' && path.trim().length > 0)
+      .slice(0, 50);
+    const directoryPaths = Array.isArray(parsed.directoryPaths)
+      ? parsed.directoryPaths
+        .filter((path): path is string => typeof path === 'string' && path.trim().length > 0)
+        .slice(0, 50)
+      : [];
+    const activeFilePath = typeof parsed.activeFilePath === 'string' && parsed.activeFilePath.trim().length > 0
+      ? parsed.activeFilePath
+      : null;
+    const viewMode = parsed.viewMode === 'source' ? 'source' : 'reading';
+    const sidebarTab = parsed.sidebarTab === 'outline' || parsed.sidebarTab === 'recent'
+      ? parsed.sidebarTab
+      : 'directory';
+    return { tabPaths, directoryPaths, activeFilePath, viewMode, sidebarTab };
+  } catch {
+    return null;
+  }
+}
+
 function getSavedWindowState(): SavedWindowState | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(windowStateStorageKey) ?? 'null') as Partial<SavedWindowState> | null;
@@ -337,6 +371,8 @@ function App() {
   const pendingHeadingRef = useRef<string | null>(null);
   const programmaticHeadingRef = useRef<string | null>(null);
   const programmaticHeadingTimerRef = useRef<number | null>(null);
+  const startupInitializationRef = useRef(false);
+  const sessionStateReadyRef = useRef(false);
   const directoryProjectsRef = useRef<DirectoryProject[]>([]);
   const directoryRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const refreshingDirectoryPathsRef = useRef<Set<string>>(new Set());
@@ -768,6 +804,57 @@ function App() {
     if (shouldRecord) {
       recordHistory({ path: readerFile.filePath, name: readerFile.fileName, kind: 'file' });
     }
+  }
+
+  function saveSessionState(viewModeOverride = viewMode, sidebarTabOverride = sidebarTab) {
+    if (!sessionStateReadyRef.current) return;
+    localStorage.setItem(sessionStateStorageKey, JSON.stringify({
+      tabPaths: tabsRef.current.map((tab) => tab.file.filePath),
+      directoryPaths: directoryProjectsRef.current.map((project) => project.directoryPath),
+      activeFilePath: tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)?.file.filePath ?? null,
+      viewMode: viewModeOverride,
+      sidebarTab: sidebarTabOverride
+    } satisfies SavedSessionState));
+  }
+
+  async function restoreSessionState() {
+    const saved = getSavedSessionState();
+    if (!saved) return;
+
+    const uniqueDirectoryPaths = Array.from(new Set(saved.directoryPaths.map(normalizeFilePath)))
+      .map((normalizedPath) => saved.directoryPaths.find((path) => normalizeFilePath(path) === normalizedPath))
+      .filter((path): path is string => Boolean(path));
+    for (const directoryPath of uniqueDirectoryPaths) {
+      try {
+        const directory = await invoke<MarkdownDirectory>('load_reader_directory', { directoryPath });
+        upsertDirectoryProject(directory.directoryPath, directory.files, true);
+      } catch {
+      }
+    }
+
+    const uniquePaths = Array.from(new Set(saved.tabPaths.map(normalizeFilePath)))
+      .map((normalizedPath) => saved.tabPaths.find((path) => normalizeFilePath(path) === normalizedPath))
+      .filter((path): path is string => Boolean(path));
+    for (const filePath of uniquePaths) {
+      try {
+        const readerFile = await invoke<MarkdownFile>('open_reader_path', { filePath });
+        if (saved.directoryPaths.length) openTabNow(readerFile, false);
+        else await openSingleFile(readerFile, false);
+      } catch {
+      }
+    }
+
+    const activePath = saved.activeFilePath ? normalizeFilePath(saved.activeFilePath) : null;
+    const activeTab = activePath ? tabsRef.current.find((tab) => tab.id === activePath) : undefined;
+    if (activeTab) {
+      activeTabIdRef.current = activeTab.id;
+      setActiveTabId(activeTab.id);
+      setActiveHeading('');
+      setProgress(0);
+      restoredDocumentRef.current = null;
+    }
+    setViewMode(saved.viewMode);
+    setSidebarTab(saved.sidebarTab);
   }
 
   function displayDirectory(directory: MarkdownDirectory, shouldRecord = true) {
@@ -1343,11 +1430,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-    void invoke<MarkdownFile | null>('take_startup_reader_file')
-      .then((startupFile) => { if (isMounted && startupFile) void openSingleFile(startupFile); })
-      .catch(() => undefined);
-    return () => { isMounted = false; };
+    saveSessionState();
+  }, [activeTabId, directoryProjects, sidebarTab, tabs, viewMode]);
+
+  useEffect(() => {
+    if (startupInitializationRef.current) return;
+    startupInitializationRef.current = true;
+    void (async () => {
+      const startupFile = await invoke<MarkdownFile | null>('take_startup_reader_file');
+      if (startupFile) {
+        sessionStateReadyRef.current = true;
+        await openSingleFile(startupFile);
+        saveSessionState();
+        return;
+      }
+
+      await restoreSessionState();
+      sessionStateReadyRef.current = true;
+      const saved = getSavedSessionState();
+      saveSessionState(saved?.viewMode, saved?.sidebarTab);
+    })().catch(() => undefined);
   }, []);
 
   useEffect(() => {
