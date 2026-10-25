@@ -275,7 +275,7 @@ a:focus-visible {
   align-items: center;
   flex: 0 0 auto;
   min-width: 0;
-  max-width: 220px;
+  max-width: min(220px, 100%);
   border: 1px solid transparent;
   border-radius: 6px;
 }
@@ -288,6 +288,7 @@ a:focus-visible {
 .document-tab > button:first-child {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 4px;
   min-width: 0;
   height: 27px;
@@ -299,9 +300,12 @@ a:focus-visible {
   color: var(--muted);
   cursor: pointer;
   font-size: 11px;
+  text-align: left;
 }
 
 .document-tab > button:first-child span {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -309,9 +313,12 @@ a:focus-visible {
 
 .document-tab.active > button:first-child,
 .document-tab:hover > button:first-child { color: var(--text); }
-.document-tab > button:first-child i { color: var(--accent); font-style: normal; }
+.document-tab > button:first-child i { flex: 0 0 auto; color: var(--accent); font-style: normal; }
 
 .document-tab-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 23px;
   width: 23px;
   height: 27px;
   padding: 0;

@@ -1330,7 +1330,16 @@ function App() {
   useEffect(() => { localStorage.setItem('md-reader-font-size', String(fontSize)); }, [fontSize]);
 
   useEffect(() => {
-    activeTabElementRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const tab = activeTabElementRef.current;
+    const tabList = tab?.parentElement;
+    if (!tab || !tabList) return;
+
+    const revealActiveTab = () => tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    revealActiveTab();
+    const observer = new ResizeObserver(revealActiveTab);
+    observer.observe(tabList);
+    observer.observe(tab);
+    return () => observer.disconnect();
   }, [activeTabId, tabs.length]);
 
   useEffect(() => {
@@ -1673,7 +1682,7 @@ function App() {
                 : tab.file.fileName;
               return <div ref={tab.id === activeTabId ? activeTabElementRef : null} className={tab.id === activeTabId ? 'document-tab active' : 'document-tab'} key={tab.id} onContextMenu={(event) => openTabContextMenu(event, tab.id)}>
                 <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => selectFile(tab.file)} title={tab.file.filePath}><span>{tabLabel}</span>{dirty ? <i aria-label={t.unsaved}>•</i> : null}</button>
-                <button className="document-tab-close" type="button" aria-label={t.closeFile(tab.file.fileName)} onClick={() => closeTab(tab.id)}>×</button>
+                <button className="document-tab-close" type="button" aria-label={t.closeFile(tab.file.fileName)} title={t.closeFile(tab.file.fileName)} onClick={() => closeTab(tab.id)}>×</button>
               </div>;
             })}
           </div> : null}
